@@ -1,0 +1,2818 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Sunset Coast Turbo - TV Edition</title>
+<style>
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    background-color: #05050a;
+    overflow: hidden;
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  }
+  #gameContainer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #000;
+  }
+  canvas {
+    display: block;
+    background: #000;
+    image-rendering: auto;
+  }
+</style>
+</head>
+<body>
+<div id="gameContainer">
+  <canvas id="gameCanvas" width="1280" height="720"></canvas>
+</div>
+
+<script>
+(function() {
+  "use strict";
+
+  // ============================================================================
+  // 1. CONSTANTS & CONFIGURATION
+  // ============================================================================
+  var WIDTH = 1280;
+  var HEIGHT = 720;
+  var canvas = document.getElementById("gameCanvas");
+  var ctx = canvas.getContext("2d", { alpha: false });
+
+  // Game States
+  var STATE_SPLASH = 0;
+  var STATE_MENU = 1;
+  var STATE_INTRO = 2;
+  var STATE_RACING = 3;
+  var STATE_PAUSED = 4;
+  var STATE_RESULTS = 5;
+
+  // Camera Views
+  var CAM_CHASE = 0;
+  var CAM_TOPDOWN = 1;
+
+  // Key Codes (TV Remote + Keyboard fallback)
+  var KEY_LEFT = 37;
+  var KEY_UP = 38;
+  var KEY_RIGHT = 39;
+  var KEY_DOWN = 40;
+  var KEY_OK = 13;
+  var KEY_BACK_TIZEN = 10009;
+  var KEY_BACKSPACE = 8;
+  var KEY_ESCAPE = 27;
+
+  // Register Tizen TV Remote Keys safely
+  try {
+    if (window.tizen && window.tizen.tvinputdevice) {
+      var tizenKeys = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter"];
+      for (var tk = 0; tk < tizenKeys.length; tk++) {
+        try {
+          window.tizen.tvinputdevice.registerKey(tizenKeys[tk]);
+        } catch (innerErr) {}
+      }
+    }
+  } catch (err) {}
+
+  // Responsive scaling for 32" TV screen
+  function resizeCanvas() {
+    var winW = window.innerWidth || WIDTH;
+    var winH = window.innerHeight || HEIGHT;
+    var scale = Math.min(winW / WIDTH, winH / HEIGHT);
+    canvas.style.width = Math.floor(WIDTH * scale) + "px";
+    canvas.style.height = Math.floor(HEIGHT * scale) + "px";
+  }
+  window.addEventListener("resize", resizeCanvas, false);
+  resizeCanvas();
+
+  // ============================================================================
+  // 2. LEVEL DATA DEFINITIONS (Extensible architecture for future levels)
+  // ============================================================================
+  var LEVELS = [
+    {
+      id: 1,
+      name: "STAGE 1: SUNSET COAST HIGHWAY",
+      subtitle: "Golden Hour • Coastal Cliffs • Checkpoint Time Attack",
+      environment: "coastal_sunset",
+      timeOfDay: "sunset",
+      weather: "clear_haze",
+      segmentLength: 200,
+      roadWidth: 2200,
+      lanes: 3,
+      drawDistance: 155,
+      cameraHeight: 1050,
+      fov: 100,
+      startTimeLimit: 40.0,
+      checkpointBonus: 26.0,
+      checkpointCount: 5,
+      rivalCount: 5,
+      trafficCount: 38,
+      difficulty: 1.0,
+      colors: {
+        skyTop: "#140c2c",
+        skyMid: "#5e1c47",
+        skyBot: "#f26b38",
+        horizonGlow: "#ffcc55",
+        waterDark: "#1c244b",
+        waterLight: "#e86f38",
+        roadLight: "#464952",
+        roadDark: "#3e4149",
+        rumbleLight: "#e03c28",
+        rumbleDark: "#f2f2f2",
+        laneLight: "#ffd27d",
+        sandLight: "#8a5a44",
+        sandDark: "#784c38"
+      },
+      // Track blueprint: [enter, hold, exit, curve, hillHeight]
+      // Total length tuned for ~2 to 2.5 minutes of racing (~6400 segments)
+      trackBlueprint: [
+        [0, 80, 0, 0, 0],            // Starting straight
+        [30, 90, 30, -2.2, 15],      // Sweeping left along beach
+        [25, 60, 25, 0, -10],        // Dip down
+        [35, 110, 35, 3.0, 25],      // Climbing right cliff curve
+        [20, 70, 20, -1.8, 0],       // Fast coastal S-bend 1
+        [20, 70, 20, 2.2, -20],      // Fast coastal S-bend 2
+        [30, 120, 30, 0, 35],        // Long scenic hill climb
+        [30, 100, 30, -3.5, -30],    // Sharp downhill left turn
+        [25, 90, 25, 1.5, 0],        // Gentle right
+        [40, 140, 40, -2.6, 20],     // Wide ocean bay curve
+        [20, 80, 20, 0, -15],        // Straight valley
+        [35, 110, 35, 3.8, 10],      // Tight headland right
+        [25, 75, 25, -2.5, 25],      // Left climb
+        [25, 75, 25, 2.5, -25],      // Right descent
+        [30, 130, 30, 0, 0],         // High speed straightaway
+        [40, 130, 40, -3.2, 30],     // Grand coastal overlook left
+        [30, 95, 30, 2.8, -20],      // Winding descent right
+        [25, 85, 25, -2.8, -10],     // Winding descent left
+        [30, 110, 30, 1.8, 15],      // Medium right roller
+        [35, 120, 35, -3.8, 0],      // Challenging hairpin-style left
+        [25, 90, 25, 2.0, 25],       // Uphill recovery right
+        [30, 100, 30, -1.5, -25],    // Downhill sprint
+        [35, 110, 35, 3.4, 15],      // Final canyon right
+        [30, 90, 30, -2.4, -15],     // Final bay sweep left
+        [25, 140, 25, 0, 0]          // Finish line straight
+      ]
+    }
+  ];
+
+  // ============================================================================
+  // 3. PERSISTENT SETTINGS & STORAGE
+  // ============================================================================
+  var settings = {
+    cameraView: CAM_CHASE,
+    soundEnabled: true,
+    bestTime: null
+  };
+
+  function loadSettings() {
+    try {
+      if (window.localStorage) {
+        var cam = localStorage.getItem("sctv_camera");
+        if (cam !== null) settings.cameraView = parseInt(cam, 10) === 1 ? CAM_TOPDOWN : CAM_CHASE;
+        var snd = localStorage.getItem("sctv_sound");
+        if (snd !== null) settings.soundEnabled = (snd === "1");
+        var bt = localStorage.getItem("sctv_bestTime_1");
+        if (bt !== null && !isNaN(parseFloat(bt))) settings.bestTime = parseFloat(bt);
+      }
+    } catch (e) {}
+  }
+
+  function saveSettings() {
+    try {
+      if (window.localStorage) {
+        localStorage.setItem("sctv_camera", settings.cameraView === CAM_TOPDOWN ? "1" : "0");
+        localStorage.setItem("sctv_sound", settings.soundEnabled ? "1" : "0");
+        if (settings.bestTime !== null) {
+          localStorage.setItem("sctv_bestTime_1", settings.bestTime.toFixed(2));
+        }
+      }
+    } catch (e) {}
+  }
+
+  loadSettings();
+
+  // ============================================================================
+  // 4. PROCEDURAL WEB AUDIO ENGINE (No external files, try/catch safe)
+  // ============================================================================
+  var AudioSys = (function() {
+    var actx = null;
+    var initialized = false;
+    var masterGain = null;
+
+    // Continuous nodes
+    var engOsc1 = null;
+    var engOsc2 = null;
+    var engFilter = null;
+    var engGain = null;
+
+    var screechNode = null;
+    var screechFilter = null;
+    var screechGain = null;
+
+    var nitroNode = null;
+    var nitroFilter = null;
+    var nitroGain = null;
+
+    // Synthwave background music state
+    var musicTimer = 0;
+    var musicStep = 0;
+    var bassNotes = [55, 55, 65.41, 55, 73.42, 65.41, 49, 49];
+    var arpNotes = [220, 277.18, 329.63, 440, 329.63, 277.18, 246.94, 329.63];
+
+    function init() {
+      if (initialized) return;
+      try {
+        var AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+        actx = new AudioCtx();
+        if (actx.state === "suspended") {
+          actx.resume();
+        }
+
+        masterGain = actx.createGain();
+        masterGain.gain.value = settings.soundEnabled ? 0.45 : 0.0;
+        masterGain.connect(actx.destination);
+
+        // Create noise buffer for screech, nitro, crash, drums
+        var bufSize = actx.sampleRate * 2;
+        var noiseBuf = actx.createBuffer(1, bufSize, actx.sampleRate);
+        var out = noiseBuf.getChannelData(0);
+        for (var i = 0; i < bufSize; i++) {
+          out[i] = Math.random() * 2 - 1;
+        }
+
+        // Engine sound (Dual oscillator + lowpass filter)
+        engOsc1 = actx.createOscillator();
+        engOsc2 = actx.createOscillator();
+        engFilter = actx.createBiquadFilter();
+        engGain = actx.createGain();
+
+        engOsc1.type = "sawtooth";
+        engOsc2.type = "triangle";
+        engOsc1.frequency.value = 55;
+        engOsc2.frequency.value = 110;
+
+        engFilter.type = "lowpass";
+        engFilter.frequency.value = 260;
+
+        engGain.gain.value = 0.0;
+
+        engOsc1.connect(engFilter);
+        engOsc2.connect(engFilter);
+        engFilter.connect(engGain);
+        engGain.connect(masterGain);
+
+        engOsc1.start(0);
+        engOsc2.start(0);
+
+        // Tire screech sound
+        screechNode = actx.createBufferSource();
+        screechNode.buffer = noiseBuf;
+        screechNode.loop = true;
+        screechFilter = actx.createBiquadFilter();
+        screechFilter.type = "bandpass";
+        screechFilter.frequency.value = 1500;
+        screechFilter.Q.value = 6.0;
+        screechGain = actx.createGain();
+        screechGain.gain.value = 0.0;
+
+        screechNode.connect(screechFilter);
+        screechFilter.connect(screechGain);
+        screechGain.connect(masterGain);
+        screechNode.start(0);
+
+        // Nitro whoosh sound
+        nitroNode = actx.createBufferSource();
+        nitroNode.buffer = noiseBuf;
+        nitroNode.loop = true;
+        nitroFilter = actx.createBiquadFilter();
+        nitroFilter.type = "bandpass";
+        nitroFilter.frequency.value = 420;
+        nitroFilter.Q.value = 1.5;
+        nitroGain = actx.createGain();
+        nitroGain.gain.value = 0.0;
+
+        nitroNode.connect(nitroFilter);
+        nitroFilter.connect(nitroGain);
+        nitroGain.connect(masterGain);
+        nitroNode.start(0);
+
+        initialized = true;
+      } catch (e) {
+        initialized = false;
+      }
+    }
+
+    function updateMasterMute() {
+      if (!initialized || !masterGain) return;
+      try {
+        masterGain.gain.value = settings.soundEnabled ? 0.45 : 0.0;
+      } catch (e) {}
+    }
+
+    function silenceContinuous() {
+      if (!initialized) return;
+      try {
+        engGain.gain.value = 0;
+        screechGain.gain.value = 0;
+        nitroGain.gain.value = 0;
+      } catch (e) {}
+    }
+
+    function updateRacingAudio(dt, rpmRatio, throttle, isDrifting, isOffroad, isNitro, shiftTimer) {
+      if (!initialized || !settings.soundEnabled) {
+        silenceContinuous();
+        return;
+      }
+      try {
+        if (actx.state === "suspended") actx.resume();
+
+        // Engine pitch & timbre
+        var shiftCut = shiftTimer > 0 ? 0.35 : 1.0;
+        var baseFreq = 42 + rpmRatio * 145;
+        engOsc1.frequency.value = baseFreq;
+        engOsc2.frequency.value = baseFreq * 1.98;
+        engFilter.frequency.value = 180 + rpmRatio * 650 + (isNitro ? 350 : 0);
+        engGain.gain.value = (0.10 + throttle * 0.12 + rpmRatio * 0.08) * shiftCut;
+
+        // Drift screech or offroad rumble
+        if (isDrifting) {
+          screechFilter.frequency.value = 1350 + Math.sin( musicStep * 2 ) * 150;
+          screechFilter.Q.value = 5.5;
+          screechGain.gain.value = 0.14;
+        } else if (isOffroad) {
+          screechFilter.frequency.value = 260;
+          screechFilter.Q.value = 1.2;
+          screechGain.gain.value = 0.12;
+        } else {
+          screechGain.gain.value = 0.0;
+        }
+
+        // Nitro whoosh
+        if (isNitro) {
+          nitroFilter.frequency.value = 380 + rpmRatio * 320;
+          nitroGain.gain.value = 0.24;
+        } else {
+          nitroGain.gain.value = 0.0;
+        }
+      } catch (e) {}
+    }
+
+    function updateMusic(dt, isRacingOrIntro) {
+      if (!initialized || !settings.soundEnabled) return;
+      musicTimer += dt;
+      var stepDuration = isRacingOrIntro ? 0.14 : 0.18;
+      if (musicTimer >= stepDuration) {
+        musicTimer -= stepDuration;
+        musicStep = (musicStep + 1) % 32;
+        try {
+          var now = actx.currentTime;
+          // Synth bass on every step
+          var bassIdx = Math.floor(musicStep / 4) % bassNotes.length;
+          var bFreq = bassNotes[bassIdx] * (musicStep % 2 === 0 ? 1 : 2);
+          var bOsc = actx.createOscillator();
+          var bGain = actx.createGain();
+          bOsc.type = "sawtooth";
+          bOsc.frequency.setValueAtTime(bFreq, now);
+          bGain.gain.setValueAtTime(0.06, now);
+          bGain.gain.exponentialRampToValueAtTime(0.005, now + stepDuration * 0.9);
+          bOsc.connect(bGain);
+          bGain.connect(masterGain);
+          bOsc.start(now);
+          bOsc.stop(now + stepDuration);
+
+          // Sunset synth melody on even steps
+          if (musicStep % 2 === 0) {
+            var arpIdx = (musicStep / 2) % arpNotes.length;
+            var aOsc = actx.createOscillator();
+            var aGain = actx.createGain();
+            aOsc.type = "triangle";
+            aOsc.frequency.setValueAtTime(arpNotes[arpIdx], now);
+            aGain.gain.setValueAtTime(0.035, now);
+            aGain.gain.exponentialRampToValueAtTime(0.003, now + stepDuration * 1.6);
+            aOsc.connect(aGain);
+            aGain.connect(masterGain);
+            aOsc.start(now);
+            aOsc.stop(now + stepDuration * 1.7);
+          }
+
+          // Kick pulse on 0, 4, 8, 12...
+          if (musicStep % 4 === 0) {
+            var kOsc = actx.createOscillator();
+            var kGain = actx.createGain();
+            kOsc.type = "sine";
+            kOsc.frequency.setValueAtTime(115, now);
+            kOsc.frequency.exponentialRampToValueAtTime(36, now + 0.11);
+            kGain.gain.setValueAtTime(0.14, now);
+            kGain.gain.exponentialRampToValueAtTime(0.005, now + 0.12);
+            kOsc.connect(kGain);
+            kGain.connect(masterGain);
+            kOsc.start(now);
+            kOsc.stop(now + 0.13);
+          }
+        } catch (e) {}
+      }
+    }
+
+    function playTone(freq, duration, type, vol) {
+      if (!initialized || !settings.soundEnabled) return;
+      try {
+        var now = actx.currentTime;
+        var osc = actx.createOscillator();
+        var g = actx.createGain();
+        osc.type = type || "sine";
+        osc.frequency.setValueAtTime(freq, now);
+        g.gain.setValueAtTime(vol || 0.15, now);
+        g.gain.exponentialRampToValueAtTime(0.005, now + duration);
+        osc.connect(g);
+        g.connect(masterGain);
+        osc.start(now);
+        osc.stop(now + duration + 0.02);
+      } catch (e) {}
+    }
+
+    function playMenuMove() {
+      playTone(520, 0.07, "triangle", 0.12);
+    }
+
+    function playMenuSelect() {
+      playTone(660, 0.09, "triangle", 0.15);
+      setTimeout(function() { playTone(880, 0.14, "triangle", 0.15); }, 60);
+    }
+
+    function playCountdown(isGo) {
+      if (isGo) {
+        playTone(880, 0.45, "sawtooth", 0.20);
+        playTone(1108.7, 0.45, "triangle", 0.18);
+      } else {
+        playTone(440, 0.22, "sine", 0.18);
+      }
+    }
+
+    function playCheckpoint() {
+      playTone(587.33, 0.12, "triangle", 0.18);
+      setTimeout(function() { playTone(783.99, 0.12, "triangle", 0.18); }, 80);
+      setTimeout(function() { playTone(1174.66, 0.30, "triangle", 0.22); }, 160);
+    }
+
+    function playCrash() {
+      if (!initialized || !settings.soundEnabled) return;
+      try {
+        var now = actx.currentTime;
+        var osc = actx.createOscillator();
+        var g = actx.createGain();
+        osc.type = "sawtooth";
+        osc.frequency.setValueAtTime(140, now);
+        osc.frequency.exponentialRampToValueAtTime(28, now + 0.28);
+        g.gain.setValueAtTime(0.32, now);
+        g.gain.exponentialRampToValueAtTime(0.01, now + 0.30);
+        osc.connect(g);
+        g.connect(masterGain);
+        osc.start(now);
+        osc.stop(now + 0.32);
+      } catch (e) {}
+    }
+
+    return {
+      init: init,
+      updateMasterMute: updateMasterMute,
+      silenceContinuous: silenceContinuous,
+      updateRacingAudio: updateRacingAudio,
+      updateMusic: updateMusic,
+      playMenuMove: playMenuMove,
+      playMenuSelect: playMenuSelect,
+      playCountdown: playCountdown,
+      playCheckpoint: playCheckpoint,
+      playCrash: playCrash
+    };
+  })();
+
+  // ============================================================================
+  // 5. PRE-RENDERED OFFSCREEN CANVASES (Static Art & Sprites Cache)
+  // ============================================================================
+  var Sprites = {};
+
+  function createOffscreen(w, h) {
+    var c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    return c;
+  }
+
+  function buildCachedArt() {
+    // 1. Sunset Sky & Sun Glow Canvas (1280 x 380)
+    var skyC = createOffscreen(WIDTH, 380);
+    var sctx = skyC.getContext("2d");
+    var skyGrad = sctx.createLinearGradient(0, 0, 0, 360);
+    skyGrad.addColorStop(0.0, "#100926");
+    skyGrad.addColorStop(0.35, "#3b1542");
+    skyGrad.addColorStop(0.68, "#9c2b43");
+    skyGrad.addColorStop(0.88, "#f06835");
+    skyGrad.addColorStop(1.0, "#ffcb5c");
+    sctx.fillStyle = skyGrad;
+    sctx.fillRect(0, 0, WIDTH, 380);
+
+    // Sun halo
+    var sunX = 380;
+    var sunY = 255;
+    var sunHalo = sctx.createRadialGradient(sunX, sunY, 20, sunX, sunY, 280);
+    sunHalo.addColorStop(0.0, "rgba(255, 248, 200, 0.95)");
+    sunHalo.addColorStop(0.25, "rgba(255, 190, 85, 0.55)");
+    sunHalo.addColorStop(0.6, "rgba(240, 95, 50, 0.18)");
+    sunHalo.addColorStop(1.0, "rgba(240, 95, 50, 0.0)");
+    sctx.fillStyle = sunHalo;
+    sctx.fillRect(0, 0, WIDTH, 380);
+
+    // Stratified sunset clouds
+    sctx.fillStyle = "rgba(70, 20, 55, 0.35)";
+    for (var ci = 0; ci < 18; ci++) {
+      var cx = (ci * 137) % WIDTH;
+      var cy = 70 + (ci * 43) % 150;
+      var cw = 140 + (ci * 29) % 160;
+      var ch = 8 + (ci % 4) * 4;
+      sctx.fillRect(cx, cy, cw, ch);
+    }
+
+    // Sun disc with horizontal synth/sunset scan cuts
+    sctx.save();
+    sctx.beginPath();
+    sctx.arc(sunX, sunY, 68, 0, Math.PI * 2);
+    sctx.clip();
+    var discGrad = sctx.createLinearGradient(0, sunY - 68, 0, sunY + 68);
+    discGrad.addColorStop(0, "#fffbe0");
+    discGrad.addColorStop(0.6, "#ffae38");
+    discGrad.addColorStop(1, "#e83b3b");
+    sctx.fillStyle = discGrad;
+    sctx.fillRect(sunX - 70, sunY - 70, 140, 140);
+    sctx.fillStyle = "rgba(150, 40, 55, 0.35)";
+    for (var sy = sunY + 10; sy < sunY + 68; sy += 11) {
+      sctx.fillRect(sunX - 70, sy, 140, 3);
+    }
+    sctx.restore();
+    Sprites.sky = skyC;
+
+    // 2. Parallax Coastal Mountains & Ocean (1280 x 160, tileable horizontally)
+    var mtnC = createOffscreen(WIDTH, 160);
+    var mctx = mtnC.getContext("2d");
+
+    // Distant mountain range
+    mctx.fillStyle = "#2d1436";
+    mctx.beginPath();
+    mctx.moveTo(0, 160);
+    var mPts1 = [0,95, 110,55, 220,82, 340,35, 480,75, 610,42, 740,85, 890,28, 1020,65, 1150,48, 1280,95];
+    for (var m1 = 0; m1 < mPts1.length; m1 += 2) {
+      mctx.lineTo(mPts1[m1], mPts1[m1 + 1]);
+    }
+    mctx.lineTo(WIDTH, 160);
+    mctx.closePath();
+    mctx.fill();
+
+    // Closer coastal cliffs & silhouettes
+    mctx.fillStyle = "#1c0b26";
+    mctx.beginPath();
+    mctx.moveTo(0, 160);
+    var mPts2 = [0,115, 90,88, 190,110, 310,72, 430,108, 560,78, 690,112, 820,68, 960,104, 1110,80, 1280,115];
+    for (var m2 = 0; m2 < mPts2.length; m2 += 2) {
+      mctx.lineTo(mPts2[m2], mPts2[m2 + 1]);
+    }
+    mctx.lineTo(WIDTH, 160);
+    mctx.closePath();
+    mctx.fill();
+
+    // Ocean strip at base of mountains
+    var seaGrad = mctx.createLinearGradient(0, 122, 0, 160);
+    seaGrad.addColorStop(0, "#5c2448");
+    seaGrad.addColorStop(0.4, "#b8463e");
+    seaGrad.addColorStop(1, "#232946");
+    mctx.fillStyle = seaGrad;
+    mctx.fillRect(0, 124, WIDTH, 36);
+
+    // Shimmer lines on water
+    mctx.fillStyle = "rgba(255, 215, 120, 0.55)";
+    for (var wi = 0; wi < 45; wi++) {
+      var wx = (wi * 73) % WIDTH;
+      var wy = 127 + (wi % 6) * 5;
+      mctx.fillRect(wx, wy, 24 + (wi % 4) * 12, 2);
+    }
+    Sprites.mountains = mtnC;
+
+    // 3. Soft Radial Glow Sprite (128 x 128) - Replaces expensive shadowBlur
+    var glowC = createOffscreen(128, 128);
+    var gctx = glowC.getContext("2d");
+    var rg = gctx.createRadialGradient(64, 64, 4, 64, 64, 62);
+    rg.addColorStop(0.0, "rgba(255, 240, 190, 0.9)");
+    rg.addColorStop(0.4, "rgba(255, 160, 60, 0.4)");
+    rg.addColorStop(1.0, "rgba(255, 120, 30, 0.0)");
+    gctx.fillStyle = rg;
+    gctx.fillRect(0, 0, 128, 128);
+    Sprites.glowWarm = glowC;
+
+    // Cyan Nitro Glow Sprite
+    var nGlowC = createOffscreen(128, 128);
+    var ngctx = nGlowC.getContext("2d");
+    var nrg = ngctx.createRadialGradient(64, 64, 4, 64, 64, 62);
+    nrg.addColorStop(0.0, "rgba(220, 255, 255, 0.95)");
+    nrg.addColorStop(0.4, "rgba(40, 190, 255, 0.55)");
+    nrg.addColorStop(1.0, "rgba(0, 100, 255, 0.0)");
+    ngctx.fillStyle = nrg;
+    ngctx.fillRect(0, 0, 128, 128);
+    Sprites.glowCyan = nGlowC;
+
+    // 4. Roadside Prop: Palm Tree (180 x 260)
+    var palmC = createOffscreen(180, 260);
+    var pctx = palmC.getContext("2d");
+    // Trunk
+    pctx.strokeStyle = "#2b1924";
+    pctx.lineWidth = 14;
+    pctx.lineCap = "round";
+    pctx.beginPath();
+    pctx.moveTo(90, 255);
+    pctx.quadraticCurveTo(68, 165, 95, 72);
+    pctx.stroke();
+    // Sunset rim highlight on trunk
+    pctx.strokeStyle = "#9e4738";
+    pctx.lineWidth = 4;
+    pctx.beginPath();
+    pctx.moveTo(86, 252);
+    pctx.quadraticCurveTo(64, 165, 92, 74);
+    pctx.stroke();
+    // Palm fronds
+    var frondAngles = [-2.6, -2.0, -1.3, -0.5, 0.2, 0.8, 1.5];
+    for (var fi = 0; fi < frondAngles.length; fi++) {
+      var ang = frondAngles[fi];
+      pctx.save();
+      pctx.translate(95, 72);
+      pctx.rotate(ang);
+      pctx.fillStyle = fi % 2 === 0 ? "#1b2b2b" : "#2d3b32";
+      pctx.beginPath();
+      pctx.moveTo(0, 0);
+      pctx.quadraticCurveTo(42, -18, 82, 12);
+      pctx.quadraticCurveTo(40, 2, 0, 6);
+      pctx.closePath();
+      pctx.fill();
+      pctx.restore();
+    }
+    Sprites.palmTree = palmC;
+
+    // 5. Roadside Prop: Coastal Cliff Boulder (160 x 110)
+    var rockC = createOffscreen(160, 110);
+    var rctx = rockC.getContext("2d");
+    rctx.fillStyle = "#3a2434";
+    rctx.beginPath();
+    rctx.moveTo(10, 105);
+    rctx.lineTo(28, 42);
+    rctx.lineTo(75, 14);
+    rctx.lineTo(125, 35);
+    rctx.lineTo(150, 105);
+    rctx.closePath();
+    rctx.fill();
+    rctx.fillStyle = "#6e3b42";
+    rctx.beginPath();
+    rctx.moveTo(28, 42);
+    rctx.lineTo(75, 14);
+    rctx.lineTo(90, 68);
+    rctx.lineTo(20, 95);
+    rctx.closePath();
+    rctx.fill();
+    Sprites.boulder = rockC;
+
+    // 6. Roadside Prop: Highway Street Lamp (120 x 280)
+    var lampC = createOffscreen(120, 280);
+    var lctx = lampC.getContext("2d");
+    lctx.strokeStyle = "#2b2d38";
+    lctx.lineWidth = 8;
+    lctx.beginPath();
+    lctx.moveTo(25, 275);
+    lctx.lineTo(25, 45);
+    lctx.quadraticCurveTo(25, 18, 65, 18);
+    lctx.lineTo(95, 18);
+    lctx.stroke();
+    lctx.drawImage(Sprites.glowWarm, 55, -18, 76, 76);
+    lctx.fillStyle = "#fff6cc";
+    lctx.fillRect(82, 15, 22, 8);
+    Sprites.streetLamp = lampC;
+
+    // 7. Roadside Prop: Curve Warning Chevron Sign (90 x 130)
+    var signC = createOffscreen(90, 130);
+    var sgctx = signC.getContext("2d");
+    sgctx.fillStyle = "#555";
+    sgctx.fillRect(41, 65, 8, 65);
+    sgctx.fillStyle = "#ffbe18";
+    sgctx.strokeStyle = "#111";
+    sgctx.lineWidth = 4;
+    sgctx.fillRect(10, 12, 70, 56);
+    sgctx.strokeRect(10, 12, 70, 56);
+    sgctx.fillStyle = "#111";
+    sgctx.beginPath();
+    sgctx.moveTo(28, 22);
+    sgctx.lineTo(52, 40);
+    sgctx.lineTo(28, 58);
+    sgctx.lineTo(42, 58);
+    sgctx.lineTo(66, 40);
+    sgctx.lineTo(42, 22);
+    sgctx.closePath();
+    sgctx.fill();
+    Sprites.signChevron = signC;
+
+    // 8. Roadside Prop: Coastal Highway Billboard (220 x 150)
+    var billC = createOffscreen(220, 150);
+    var bctx = billC.getContext("2d");
+    bctx.fillStyle = "#333";
+    bctx.fillRect(45, 95, 12, 55);
+    bctx.fillRect(163, 95, 12, 55);
+    bctx.fillStyle = "#1a2639";
+    bctx.strokeStyle = "#f5a623";
+    bctx.lineWidth = 6;
+    bctx.fillRect(10, 10, 200, 88);
+    bctx.strokeRect(10, 10, 200, 88);
+    bctx.fillStyle = "#ffcb5c";
+    bctx.font = "bold 24px sans-serif";
+    bctx.textAlign = "center";
+    bctx.fillText("SUNSET BAY", 110, 48);
+    bctx.fillStyle = "#48dbfb";
+    bctx.font = "bold 18px sans-serif";
+    bctx.fillText("COASTAL HWY 1", 110, 78);
+    Sprites.billboard = billC;
+
+    // 9. Vehicle Sprites (Player, 5 Rivals, Traffic)
+    Sprites.playerCar = createCarSprite("#e62e2d", "#ff9f43", true);
+    Sprites.rivalCars = [
+      createCarSprite("#0abde3", "#feca57", false), // Cyan
+      createCarSprite("#10ac84", "#ffffff", false), // Emerald
+      createCarSprite("#8854d0", "#ff9ff3", false), // Purple
+      createCarSprite("#f39c12", "#222222", false), // Gold
+      createCarSprite("#c8d6e5", "#ee5253", false)  // Silver
+    ];
+    Sprites.trafficCars = [
+      createTrafficSprite("#dfe6e9", "#636e72"),
+      createTrafficSprite("#e17055", "#2d3436"),
+      createTrafficSprite("#0984e3", "#dfe6e9")
+    ];
+  }
+
+  function createCarSprite(bodyColor, stripeColor, isPlayer) {
+    var c = createOffscreen(160, 96);
+    var cx = c.getContext("2d");
+
+    // Drop shadow
+    cx.fillStyle = "rgba(0, 0, 0, 0.55)";
+    cx.fillRect(12, 76, 136, 16);
+
+    // Wide rear tires
+    cx.fillStyle = "#141619";
+    cx.fillRect(14, 54, 28, 32);
+    cx.fillRect(118, 54, 28, 32);
+
+    // Lower diffuser / bumper
+    cx.fillStyle = "#22252a";
+    cx.fillRect(28, 64, 104, 18);
+
+    // Main sports car body
+    cx.fillStyle = bodyColor;
+    cx.beginPath();
+    cx.moveTo(16, 68);
+    cx.lineTo(24, 38);
+    cx.lineTo(44, 16);
+    cx.lineTo(116, 16);
+    cx.lineTo(136, 38);
+    cx.lineTo(144, 68);
+    cx.closePath();
+    cx.fill();
+
+    // Racing stripe
+    cx.fillStyle = stripeColor;
+    cx.fillRect(73, 16, 14, 52);
+
+    // Rear cabin window (dark glass with sunset reflection)
+    cx.fillStyle = "#1e272e";
+    cx.beginPath();
+    cx.moveTo(46, 20);
+    cx.lineTo(114, 20);
+    cx.lineTo(124, 38);
+    cx.lineTo(36, 38);
+    cx.closePath();
+    cx.fill();
+
+    // Rear spoiler wing
+    cx.fillStyle = "#191b20";
+    cx.fillRect(18, 32, 124, 7);
+    cx.fillRect(36, 37, 8, 8);
+    cx.fillRect(116, 37, 8, 8);
+
+    // Taillights
+    cx.fillStyle = "#ff1e1e";
+    cx.fillRect(22, 46, 32, 11);
+    cx.fillRect(106, 46, 32, 11);
+    cx.fillStyle = "#ffaaaa";
+    cx.fillRect(26, 49, 20, 5);
+    cx.fillRect(114, 49, 20, 5);
+
+    // Dual exhaust pipes
+    cx.fillStyle = "#95a5a6";
+    cx.fillRect(52, 70, 12, 7);
+    cx.fillRect(96, 70, 12, 7);
+
+    // License plate
+    cx.fillStyle = isPlayer ? "#ffcb5c" : "#ffffff";
+    cx.fillRect(68, 52, 24, 11);
+
+    return c;
+  }
+
+  function createTrafficSprite(bodyColor, roofColor) {
+    var c = createOffscreen(140, 92);
+    var cx = c.getContext("2d");
+
+    cx.fillStyle = "rgba(0, 0, 0, 0.5)";
+    cx.fillRect(14, 72, 112, 14);
+
+    // Tires
+    cx.fillStyle = "#151515";
+    cx.fillRect(18, 54, 22, 28);
+    cx.fillRect(100, 54, 22, 28);
+
+    // Sedan / SUV Body
+    cx.fillStyle = bodyColor;
+    cx.beginPath();
+    cx.moveTo(18, 66);
+    cx.lineTo(24, 34);
+    cx.lineTo(38, 14);
+    cx.lineTo(102, 14);
+    cx.lineTo(116, 34);
+    cx.lineTo(122, 66);
+    cx.closePath();
+    cx.fill();
+
+    // Window
+    cx.fillStyle = "#2d3436";
+    cx.fillRect(36, 18, 68, 18);
+
+    // Bumper
+    cx.fillStyle = roofColor;
+    cx.fillRect(20, 58, 100, 10);
+
+    // Taillights
+    cx.fillStyle = "#e84118";
+    cx.fillRect(24, 42, 22, 10);
+    cx.fillRect(94, 42, 22, 10);
+
+    return c;
+  }
+
+  buildCachedArt();
+
+  // ============================================================================
+  // 6. INPUT SYSTEM (TV Remote & Keyboard)
+  // ============================================================================
+  var keys = {
+    left: false,
+    right: false,
+    up: false,
+    down: false,
+    ok: false
+  };
+
+  // TV Remote ergonomics helper:
+  // On a TV remote, pressing Left/Right or OK with one thumb releases Up.
+  // throttleAssistTimer keeps drive momentum briefly while steering or boosting
+  // unless Down (Brake) is pressed.
+  var throttleAssistTimer = 0;
+  var nitroBurstTimer = 0;
+
+  function onKeyDown(e) {
+    var code = e.keyCode || e.which;
+    var handled = false;
+
+    if (code === KEY_LEFT) { keys.left = true; handled = true; }
+    else if (code === KEY_RIGHT) { keys.right = true; handled = true; }
+    else if (code === KEY_UP) { keys.up = true; throttleAssistTimer = 2.4; handled = true; }
+    else if (code === KEY_DOWN) { keys.down = true; throttleAssistTimer = 0; handled = true; }
+    else if (code === KEY_OK) { keys.ok = true; handled = true; }
+    else if (code === KEY_BACK_TIZEN || code === KEY_BACKSPACE || code === KEY_ESCAPE) {
+      handled = true;
+    }
+
+    if (handled) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    if (e.repeat) return;
+
+    // Handle discrete menu & state transitions
+    AudioSys.init();
+
+    if (gameState === STATE_SPLASH) {
+      if (code === KEY_OK || code === KEY_UP) {
+        AudioSys.playMenuSelect();
+        openMainMenu();
+      }
+      return;
+    }
+
+    if (gameState === STATE_MENU) {
+      handleMenuInput(code, mainMenuItems, onMainMenuSelect);
+      return;
+    }
+
+    if (gameState === STATE_PAUSED) {
+      if (code === KEY_BACK_TIZEN || code === KEY_BACKSPACE || code === KEY_ESCAPE) {
+        AudioSys.playMenuSelect();
+        gameState = STATE_RACING;
+      } else {
+        handleMenuInput(code, pauseMenuItems, onPauseMenuSelect);
+      }
+      return;
+    }
+
+    if (gameState === STATE_RESULTS) {
+      handleMenuInput(code, resultsMenuItems, onResultsMenuSelect);
+      return;
+    }
+
+    if (gameState === STATE_INTRO) {
+      if (code === KEY_OK) {
+        // Skip fly-over directly to countdown / start
+        if (introPhase === 0) {
+          AudioSys.playMenuSelect();
+          introPhase = 1;
+          introTimer = 0;
+          countdownLastBeep = 4;
+        }
+      } else if (code === KEY_BACK_TIZEN || code === KEY_BACKSPACE || code === KEY_ESCAPE) {
+        AudioSys.playMenuSelect();
+        openPauseMenu();
+      }
+      return;
+    }
+
+    if (gameState === STATE_RACING) {
+      if (code === KEY_BACK_TIZEN || code === KEY_BACKSPACE || code === KEY_ESCAPE) {
+        AudioSys.playMenuSelect();
+        AudioSys.silenceContinuous();
+        openPauseMenu();
+      } else if (code === KEY_OK) {
+        // Trigger Nitro burst (works both for short tap and hold on TV remote)
+        if (player.nitro > 8) {
+          nitroBurstTimer = 1.65;
+          throttleAssistTimer = Math.max(throttleAssistTimer, 2.4);
+        }
+      }
+    }
+  }
+
+  function onKeyUp(e) {
+    var code = e.keyCode || e.which;
+    if (code === KEY_LEFT) keys.left = false;
+    else if (code === KEY_RIGHT) keys.right = false;
+    else if (code === KEY_UP) keys.up = false;
+    else if (code === KEY_DOWN) keys.down = false;
+    else if (code === KEY_OK) keys.ok = false;
+  }
+
+  window.addEventListener("keydown", onKeyDown, false);
+  window.addEventListener("keyup", onKeyUp, false);
+
+  // ============================================================================
+  // 7. TRACK GENERATION & MINIMAP PRE-RENDERING
+  // ============================================================================
+  var currentLevel = LEVELS[0];
+  var segments = [];
+  var trackLength = 0;
+  var checkpointSegments = [];
+  var minimapCanvas = createOffscreen(200, 160);
+  var minimapPoints = [];
+
+  function easeIn(a, b, p) { return a + (b - a) * p * p; }
+  function easeOut(a, b, p) { return a + (b - a) * (1 - (1 - p) * (1 - p)); }
+  function easeInOut(a, b, p) { return a + (b - a) * ((-Math.cos(p * Math.PI) / 2) + 0.5); }
+
+  function buildTrack(level) {
+    segments = [];
+    checkpointSegments = [];
+    var segLen = level.segmentLength;
+    var curY = 0;
+
+    function addSegment(curve, y) {
+      var idx = segments.length;
+      segments.push({
+        index: idx,
+        z: idx * segLen,
+        y: curY,
+        nextY: y,
+        curve: curve,
+        sprites: [],
+        isCheckpoint: false,
+         isFinish: false,
+        projX: 0,
+        projY: 0,
+        projW: 0,
+        projScale: 0,
+        clipY: HEIGHT
+      });
+      curY = y;
+    }
+
+    function addRoadSection(enter, hold, exit, curve, hillHeight) {
+      var startY = curY;
+      var endY = startY + hillHeight * segLen;
+      var total = enter + hold + exit;
+      var n;
+      for (n = 0; n < enter; n++) {
+        addSegment(easeIn(0, curve, n / enter), easeInOut(startY, endY, n / total));
+      }
+      for (n = 0; n < hold; n++) {
+        addSegment(curve, easeInOut(startY, endY, (enter + n) / total));
+      }
+      for (n = 0; n < exit; n++) {
+        addSegment(easeInOut(curve, 0, n / exit), easeInOut(startY, endY, (enter + hold + n) / total));
+      }
+    }
+
+    var bp = level.trackBlueprint;
+    for (var i = 0; i < bp.length; i++) {
+      addRoadSection(bp[i][0], bp[i][1], bp[i][2], bp[i][3], bp[i][4]);
+    }
+
+    var totalSegs = segments.length;
+    trackLength = totalSegs * segLen;
+
+    // Place evenly spaced Checkpoints & Final Finish Line
+    var cpInterval = Math.floor((totalSegs - 180) / level.checkpointCount);
+    for (var c = 1; c <= level.checkpointCount; c++) {
+      var cpIdx = c * cpInterval;
+      if (c === level.checkpointCount) {
+        cpIdx = totalSegs - 120;
+        segments[cpIdx].isFinish = true;
+      } else {
+        segments[cpIdx].isCheckpoint = true;
+      }
+      checkpointSegments.push(cpIdx);
+    }
+
+    // Populate roadside props (palm trees, boulders, street lamps, chevron signs, billboards)
+    for (var s = 20; s < totalSegs - 40; s++) {
+      var seg = segments[s];
+      // Street lamps on right side every 28 segments
+      if (s % 28 === 0) {
+        seg.sprites.push({ type: "lamp", offset: 1.35 });
+      }
+      // Palm trees along ocean coast (left side) and right side
+      if (s % 9 === 0) {
+        seg.sprites.push({ type: "palm", offset: -1.45 - (s % 3) * 0.35 });
+      }
+      if (s % 15 === 0) {
+        seg.sprites.push({ type: "palm", offset: 1.65 + (s % 4) * 0.4 });
+      }
+      // Coastal cliff boulders on right side
+      if (s % 13 === 0) {
+        seg.sprites.push({ type: "boulder", offset: 1.55 + (s % 3) * 0.5 });
+      }
+      // Curve warning signs on sharp turns
+      if (Math.abs(seg.curve) > 2.4 && s % 10 === 0) {
+        var signSide = seg.curve > 0 ? -1.25 : 1.25;
+        seg.sprites.push({ type: "sign", offset: signSide, flip: seg.curve < 0 });
+      }
+      // Billboards every 95 segments
+      if (s % 95 === 0) {
+        seg.sprites.push({ type: "billboard", offset: (s % 190 === 0) ? -1.75 : 1.75 });
+      }
+    }
+
+    // Build 2D Minimap path from segment curvature
+    minimapPoints = [];
+    var mx = 0, my = 0, mAngle = -Math.PI / 2;
+    var minX = 0, maxX = 0, minY = 0, maxY = 0;
+
+    for (var m = 0; m < totalSegs; m++) {
+      mAngle += segments[m].curve * 0.00038;
+      mx += Math.cos(mAngle) * 1.0;
+      my += Math.sin(mAngle) * 1.0;
+      minimapPoints.push({ x: mx, y: my });
+      if (mx < minX) minX = mx;
+      if (mx > maxX) maxX = mx;
+      if (my < minY) minY = my;
+      if (my > maxY) maxY = my;
+    }
+
+    var mapW = Math.max(1, maxX - minX);
+    var mapH = Math.max(1, maxY - minY);
+    var pad = 18;
+    var scaleX = (minimapCanvas.width - pad * 2) / mapW;
+    var scaleY = (minimapCanvas.height - pad * 2) / mapH;
+    var mapScale = Math.min(scaleX, scaleY);
+    var offX = (minimapCanvas.width - mapW * mapScale) * 0.5 - minX * mapScale;
+    var offY = (minimapCanvas.height - mapH * mapScale) * 0.5 - minY * mapScale;
+
+    for (var p = 0; p < minimapPoints.length; p++) {
+      minimapPoints[p].sx = offX + minimapPoints[p].x * mapScale;
+      minimapPoints[p].sy = offY + minimapPoints[p].y * mapScale;
+    }
+
+    // Render static minimap track to offscreen canvas
+    var mmCtx = minimapCanvas.getContext("2d");
+    mmCtx.clearRect(0, 0, minimapCanvas.width, minimapCanvas.height);
+    mmCtx.fillStyle = "rgba(10, 14, 26, 0.78)";
+    mmCtx.strokeStyle = "rgba(255, 180, 70, 0.45)";
+    mmCtx.lineWidth = 2;
+    mmCtx.fillRect(2, 2, minimapCanvas.width - 4, minimapCanvas.height - 4);
+    mmCtx.strokeRect(2, 2, minimapCanvas.width - 4, minimapCanvas.height - 4);
+
+    // Track shadow/outline
+    mmCtx.strokeStyle = "#1e272e";
+    mmCtx.lineWidth = 7;
+    mmCtx.lineCap = "round";
+    mmCtx.beginPath();
+    for (var k = 0; k < minimapPoints.length; k += 12) {
+      if (k === 0) mmCtx.moveTo(minimapPoints[k].sx, minimapPoints[k].sy);
+      else mmCtx.lineTo(minimapPoints[k].sx, minimapPoints[k].sy);
+    }
+    mmCtx.stroke();
+
+    // Track inner line
+    mmCtx.strokeStyle = "#ffae42";
+    mmCtx.lineWidth = 3;
+    mmCtx.stroke();
+
+    // Draw Checkpoint ticks on minimap
+    for (var cp = 0; cp < checkpointSegments.length; cp++) {
+      var pt = minimapPoints[checkpointSegments[cp]];
+      mmCtx.fillStyle = (cp === checkpointSegments.length - 1) ? "#ff3838" : "#48dbfb";
+      mmCtx.fillRect(pt.sx - 3, pt.sy - 3, 6, 6);
+    }
+  }
+
+  // ============================================================================
+  // 8. PLAYER, RIVALS, TRAFFIC & PARTICLE ENTITIES
+  // ============================================================================
+  var player = {
+    x: 0,
+    z: 0,
+    speed: 0,
+    maxSpeed: 12200,
+    nitroMaxSpeed: 14800,
+    rpm: 1000,
+    gear: 1,
+    shiftTimer: 0,
+    nitro: 100,
+    isBoosting: false,
+    isDrifting: false,
+    driftAngle: 0,
+    isOffroad: false,
+    bounceX: 0,
+    shakeTime: 0,
+    shakeMag: 0
+  };
+
+  var rivals = [];
+  var traffic = [];
+
+  // Fixed pool of particles (smoke, dust, sparks, nitro flames) for zero GC allocation
+  var MAX_PARTICLES = 90;
+  var particles = [];
+  for (var pi = 0; pi < MAX_PARTICLES; pi++) {
+    particles.push({
+      active: false,
+      type: 0, // 0: smoke, 1: sand dust, 2: spark, 3: nitro flame
+      x: 0,
+      y: 0,
+      vx: 0,
+      vy: 0,
+      size: 10,
+      alpha: 1,
+      life: 0,
+      maxLife: 1,
+      color: "#fff"
+    });
+  }
+
+  function spawnParticle(type, x, y, vx, vy, size, maxLife, color) {
+    for (var i = 0; i < MAX_PARTICLES; i++) {
+      var p = particles[i];
+      if (!p.active) {
+        p.active = true;
+        p.type = type;
+        p.x = x;
+        p.y = y;
+        p.vx = vx;
+        p.vy = vy;
+        p.size = size;
+        p.alpha = 1.0;
+        p.life = 0;
+        p.maxLife = maxLife;
+        p.color = color;
+        return;
+      }
+    }
+  }
+
+  function updateParticles(dt) {
+    for (var i = 0; i < MAX_PARTICLES; i++) {
+      var p = particles[i];
+      if (!p.active) continue;
+      p.life += dt;
+      if (p.life >= p.maxLife) {
+        p.active = false;
+        continue;
+      }
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.alpha = 1.0 - (p.life / p.maxLife);
+      if (p.type === 0 || p.type === 1) {
+        p.size += dt * 32;
+      }
+    }
+  }
+
+  // Race state variables
+  var gameState = STATE_SPLASH;
+  var raceTimeLeft = 40.0;
+  var totalRaceTime = 0.0;
+  var nextCheckpointIdx = 0;
+  var playerPosition = 6;
+  var raceWon = false;
+  var newRecord = false;
+
+  // Popup notifications (Checkpoints, Near Miss, Drift Bonus)
+  var hudPopupText = "";
+  var hudPopupColor = "#48dbfb";
+  var hudPopupTimer = 0;
+
+  // Intro state
+  var introPhase = 0; // 0: flyover, 1: countdown
+  var introTimer = 0;
+  var introCamZ = 0;
+  var countdownLastBeep = 4;
+
+  function showHudPopup(text, color, duration) {
+    hudPopupText = text;
+    hudPopupColor = color || "#48dbfb";
+    hudPopupTimer = duration || 2.0;
+  }
+
+  function resetRace() {
+    buildTrack(currentLevel);
+
+    player.x = 0;
+    player.z = 1200;
+    player.speed = 0;
+    player.rpm = 1100;
+    player.gear = 1;
+    player.shiftTimer = 0;
+    player.nitro = 85;
+    player.isBoosting = false;
+    player.isDrifting = false;
+    player.driftAngle = 0;
+    player.isOffroad = false;
+    player.bounceX = 0;
+    player.shakeTime = 0;
+    player.shakeMag = 0;
+
+    throttleAssistTimer = 0;
+    nitroBurstTimer = 0;
+
+    raceTimeLeft = currentLevel.startTimeLimit;
+    totalRaceTime = 0;
+    nextCheckpointIdx = 0;
+    playerPosition = 6;
+    raceWon = false;
+    newRecord = false;
+    hudPopupTimer = 0;
+
+    for (var i = 0; i < MAX_PARTICLES; i++) {
+      particles[i].active = false;
+    }
+
+    // Spawn 5 Rival AI Cars on starting grid ahead of player
+    rivals = [];
+    var rivalNames = ["VEGA", "KAI", "NOVA", "REX", "BLAZE"];
+    for (var r = 0; r < currentLevel.rivalCount; r++) {
+      var laneOffset = ((r % 2 === 0) ? -0.52 : 0.52);
+      rivals.push({
+        id: r,
+        name: rivalNames[r],
+        sprite: Sprites.rivalCars[r % Sprites.rivalCars.length],
+        x: laneOffset,
+        targetX: laneOffset,
+        z: 1850 + r * 520,
+        speed: 0,
+        baseSkill: 9800 + r * 360 * currentLevel.difficulty,
+        laneTimer: 1.0 + r * 0.5
+      });
+    }
+
+    // Spawn Civilian Traffic Cars along the highway
+    traffic = [];
+    var finishZ = checkpointSegments[checkpointSegments.length - 1] * currentLevel.segmentLength;
+    for (var t = 0; t < currentLevel.trafficCount; t++) {
+      var tz = 9500 + ((t * 31500) % (finishZ - 14000));
+      var lanes = [-0.65, 0.0, 0.65];
+      var tLane = lanes[t % 3];
+      traffic.push({
+        sprite: Sprites.trafficCars[t % Sprites.trafficCars.length],
+        x: tLane,
+        z: tz,
+        speed: 5200 + (t % 4) * 650,
+        nearMissed: false
+      });
+    }
+
+    // Start Cinematic Intro
+    gameState = STATE_INTRO;
+    introPhase = 0;
+    introTimer = 0;
+    introCamZ = 4800;
+    countdownLastBeep = 4;
+  }
+
+  // ============================================================================
+  // 9. MENUS & NAVIGATION
+  // ============================================================================
+  var menuCursor = 0;
+
+  var mainMenuItems = [
+    { label: "START LEVEL 1" },
+    { label: "CAMERA VIEW" },
+    { label: "SOUND" }
+  ];
+
+  var pauseMenuItems = [
+    { label: "RESUME RACE" },
+    { label: "CAMERA VIEW" },
+    { label: "RESTART LEVEL" },
+    { label: "SOUND" },
+    { label: "MAIN MENU" }
+  ];
+
+  var resultsMenuItems = [
+    { label: "RETRY LEVEL 1" },
+    { label: "MAIN MENU" }
+  ];
+
+  function openMainMenu() {
+    AudioSys.silenceContinuous();
+    menuCursor = 0;
+    gameState = STATE_MENU;
+  }
+
+  function openPauseMenu() {
+    AudioSys.silenceContinuous();
+    menuCursor = 0;
+    gameState = STATE_PAUSED;
+  }
+
+  function openResultsMenu() {
+    AudioSys.silenceContinuous();
+    menuCursor = 0;
+    gameState = STATE_RESULTS;
+  }
+
+  function handleMenuInput(code, items, callback) {
+    if (code === KEY_UP) {
+      menuCursor = (menuCursor - 1 + items.length) % items.length;
+      AudioSys.playMenuMove();
+    } else if (code === KEY_DOWN) {
+      menuCursor = (menuCursor + 1) % items.length;
+      AudioSys.playMenuMove();
+    } else if (code === KEY_OK || code === KEY_LEFT || code === KEY_RIGHT) {
+      var itemLabel = items[menuCursor].label;
+      if ((code === KEY_LEFT || code === KEY_RIGHT) && itemLabel !== "CAMERA VIEW" && itemLabel !== "SOUND") {
+        return;
+      }
+      AudioSys.playMenuSelect();
+      callback(menuCursor);
+    }
+  }
+
+  function toggleCameraSetting() {
+    settings.cameraView = (settings.cameraView === CAM_CHASE) ? CAM_TOPDOWN : CAM_CHASE;
+    saveSettings();
+  }
+
+  function toggleSoundSetting() {
+    settings.soundEnabled = !settings.soundEnabled;
+    AudioSys.updateMasterMute();
+    saveSettings();
+  }
+
+  function onMainMenuSelect(idx) {
+    if (idx === 0) {
+      resetRace();
+    } else if (idx === 1) {
+      toggleCameraSetting();
+    } else if (idx === 2) {
+      toggleSoundSetting();
+    }
+  }
+
+  function onPauseMenuSelect(idx) {
+    if (idx === 0) {
+      gameState = STATE_RACING;
+    } else if (idx === 1) {
+      toggleCameraSetting();
+    } else if (idx === 2) {
+      resetRace();
+    } else if (idx === 3) {
+      toggleSoundSetting();
+    } else if (idx === 4) {
+      openMainMenu();
+    }
+  }
+
+  function onResultsMenuSelect(idx) {
+    if (idx === 0) {
+      resetRace();
+    } else if (idx === 1) {
+      openMainMenu();
+    }
+  }
+
+  // ============================================================================
+  // 10. GAMEPLAY PHYSICS & AI UPDATE LOOP
+  // ============================================================================
+  function updateIntro(dt) {
+    introTimer += dt;
+    if (introPhase === 0) {
+      // Flyover camera moving backwards towards the starting grid
+      introCamZ -= dt * 620;
+      if (introTimer >= 5.2 || introCamZ <= player.z) {
+        introPhase = 1;
+        introTimer = 0;
+        countdownLastBeep = 4;
+      }
+    } else {
+      // 3 - 2 - 1 - GO Countdown
+      var rem = 3.5 - introTimer;
+      var countNum = Math.ceil(rem);
+      if (countNum <= 3 && countNum >= 1 && countNum < countdownLastBeep) {
+        countdownLastBeep = countNum;
+        AudioSys.playCountdown(false);
+      } else if (countNum <= 0 && countdownLastBeep > 0) {
+        countdownLastBeep = 0;
+        AudioSys.playCountdown(true);
+      }
+      if (introTimer >= 4.1) {
+        gameState = STATE_RACING;
+        throttleAssistTimer = 1.8;
+      }
+    }
+  }
+
+  function updateRacing(dt) {
+    var segLen = currentLevel.segmentLength;
+    var curSegIdx = Math.floor(player.z / segLen) % segments.length;
+    var curSeg = segments[curSegIdx];
+
+    // Timers
+    totalRaceTime += dt;
+    raceTimeLeft -= dt;
+    if (hudPopupTimer > 0) hudPopupTimer -= dt;
+    if (player.shiftTimer > 0) player.shiftTimer -= dt;
+    if (player.shakeTime > 0) player.shakeTime -= dt;
+    if (throttleAssistTimer > 0) throttleAssistTimer -= dt;
+    if (nitroBurstTimer > 0) nitroBurstTimer -= dt;
+
+    // Check time expiration
+    if (raceTimeLeft <= 0) {
+      raceTimeLeft = 0;
+      raceWon = false;
+      openResultsMenu();
+      return;
+    }
+
+    // Determine effective throttle (supports direct Up hold + TV remote thumb assist)
+    var hasThrottle = keys.up || (throttleAssistTimer > 0 && (keys.left || keys.right || nitroBurstTimer > 0));
+    if (keys.down) hasThrottle = false;
+
+    // Nitro logic
+    var wantNitro = (keys.ok || nitroBurstTimer > 0) && player.nitro > 1 && !keys.down;
+    if (wantNitro) {
+      player.isBoosting = true;
+      hasThrottle = true;
+      player.nitro = Math.max(0, player.nitro - dt * 23);
+      if (player.nitro <= 1) {
+        player.isBoosting = false;
+        nitroBurstTimer = 0;
+      }
+    } else {
+      player.isBoosting = false;
+      // Passive slow recharge
+      player.nitro = Math.min(100, player.nitro + dt * 3.2);
+    }
+
+    // Acceleration, Braking, Reverse & Coasting
+    var targetTopSpeed = player.isBoosting ? player.nitroMaxSpeed : player.maxSpeed;
+    var speedRatio = Math.max(0, player.speed) / player.maxSpeed;
+
+    if (keys.down) {
+      if (player.speed > 100) {
+        player.speed -= dt * 8800; // Braking
+      } else {
+        player.speed = Math.max(-2800, player.speed - dt * 2600); // Reverse
+      }
+    } else if (hasThrottle) {
+      var accelRate = player.isBoosting ? 5800 : (3900 * (1.15 - speedRatio * 0.45));
+      player.speed += dt * accelRate;
+      if (player.speed > targetTopSpeed) {
+        player.speed -= dt * 3500;
+      }
+    } else {
+      // Gentle coasting
+      if (player.speed > 0) {
+        player.speed = Math.max(0, player.speed - dt * 1650);
+      } else if (player.speed < 0) {
+        player.speed = Math.min(0, player.speed + dt * 2200);
+      }
+    }
+
+    // Steering & Drift Physics
+    var steerInput = (keys.left ? -1 : 0) + (keys.right ? 1 : 0);
+    if (steerInput !== 0 && Math.abs(player.speed) > 150) {
+      var steerRate = 1.95 * (0.45 + 0.55 * Math.min(1, Math.abs(player.speed) / player.maxSpeed));
+      player.x += steerInput * steerRate * dt;
+
+      // Initiate Drift if holding turn at high speed
+      if (player.speed > player.maxSpeed * 0.68 && Math.abs(curSeg.curve) > 1.2) {
+        player.isDrifting = true;
+        player.driftAngle += (steerInput * 1.15 - player.driftAngle) * dt * 8;
+        // Drift refills Nitro!
+        player.nitro = Math.min(100, player.nitro + dt * 11.5);
+      } else {
+        player.isDrifting = false;
+        player.driftAngle += (steerInput * 0.35 - player.driftAngle) * dt * 10;
+      }
+    } else {
+      player.isDrifting = false;
+      player.driftAngle += (0 - player.driftAngle) * dt * 10;
+    }
+
+    // Centrifugal curve force pushing car outward
+    player.x -= (curSeg.curve * 0.43) * (speedRatio * speedRatio) * dt;
+
+    // Apply collision bounce decay
+    if (Math.abs(player.bounceX) > 0.01) {
+      player.x += player.bounceX * dt;
+      player.bounceX *= Math.pow(0.05, dt);
+    }
+
+    // Off-road detection & sand dust
+    if (Math.abs(player.x) > 1.06 && Math.abs(player.speed) > 1000) {
+      player.isOffroad = true;
+      var offroadLimit = player.maxSpeed * 0.55;
+      if (player.speed > offroadLimit) {
+        player.speed -= dt * 5200;
+      }
+      player.shakeTime = 0.08;
+      player.shakeMag = 4;
+
+      // Roadside prop collision check
+      if (Math.abs(player.x) > 1.32 && player.speed > 3800) {
+        for (var sp = 0; sp < curSeg.sprites.length; sp++) {
+          var prop = curSeg.sprites[sp];
+          if (Math.abs(player.x - prop.offset) < 0.28) {
+            triggerCrash(player.x > 0 ? -1.8 : 1.8, 0.55);
+            player.x = player.x > 0 ? 1.15 : -1.15;
+            break;
+          }
+        }
+      }
+    } else {
+      player.isOffroad = false;
+    }
+
+    // Clamp lateral boundary
+    player.x = Math.max(-2.1, Math.min(2.1, player.x));
+
+    // Advance player Z
+    player.z += player.speed * dt;
+    if (player.z < 500) player.z = 500;
+
+    // Automatic 6-Speed Gearbox & RPM Calculation
+    updateGearAndRPM(hasThrottle);
+
+    // Spawn Exhaust / Drift / Offroad Particles
+    if (player.isDrifting) {
+      spawnParticle(0, WIDTH * 0.5 - 42, HEIGHT - 48, (Math.random() - 0.5) * 90, -35 - Math.random() * 40, 16, 0.45, "rgba(230,230,240,0.65)");
+      spawnParticle(0, WIDTH * 0.5 + 42, HEIGHT - 48, (Math.random() - 0.5) * 90, -35 - Math.random() * 40, 16, 0.45, "rgba(230,230,240,0.65)");
+    }
+    if (player.isOffroad) {
+      spawnParticle(1, WIDTH * 0.5 + (Math.random() - 0.5) * 95, HEIGHT - 44, (Math.random() - 0.5) * 140, -50 - Math.random() * 50, 18, 0.42, "rgba(195,135,85,0.75)");
+    }
+    if (player.isBoosting) {
+      spawnParticle(3, WIDTH * 0.5 - 24, HEIGHT - 50, (Math.random() - 0.5) * 40, 40 + Math.random() * 60, 14, 0.18, "#48dbfb");
+      spawnParticle(3, WIDTH * 0.5 + 24, HEIGHT - 50, (Math.random() - 0.5) * 40, 40 + Math.random() * 60, 14, 0.18, "#48dbfb");
+    }
+
+    // Update Checkpoints & Finish Line
+    if (nextCheckpointIdx < checkpointSegments.length) {
+      var cpZ = checkpointSegments[nextCheckpointIdx] * segLen;
+      if (player.z >= cpZ) {
+        AudioSys.playCheckpoint();
+        nextCheckpointIdx++;
+        if (nextCheckpointIdx >= checkpointSegments.length) {
+          // Crossed Finish Line!
+          raceWon = true;
+          if (settings.bestTime === null || totalRaceTime < settings.bestTime) {
+            settings.bestTime = totalRaceTime;
+            newRecord = true;
+            saveSettings();
+          }
+          openResultsMenu();
+          return;
+        } else {
+          raceTimeLeft += currentLevel.checkpointBonus;
+          showHudPopup("CHECKPOINT! +" + currentLevel.checkpointBonus.toFixed(0) + "s TIME BONUS", "#2ed573", 2.6);
+        }
+      }
+    }
+
+    // Update Traffic AI & Player-Traffic Collisions / Near-Misses
+    for (var t = 0; t < traffic.length; t++) {
+      var tr = traffic[t];
+      tr.z += tr.speed * dt;
+      if (tr.z > trackLength - 4000) {
+        tr.z = 6000;
+        tr.nearMissed = false;
+      }
+
+      var dz = tr.z - player.z;
+      if (Math.abs(dz) < 175) {
+        var dx = Math.abs(tr.x - player.x);
+        if (dx < 0.30) {
+          // Crash into traffic car
+          triggerCrash(player.x < tr.x ? -2.2 : 2.2, 0.62);
+          player.z = tr.z - 185;
+        } else if (dx < 0.54 && !tr.nearMissed && player.speed > 7500) {
+          // High speed Near-Miss bonus!
+          tr.nearMissed = true;
+          player.nitro = Math.min(100, player.nitro + 14);
+          showHudPopup("NEAR MISS! +14 NITRO", "#48dbfb", 1.5);
+        }
+      }
+    }
+
+    // Update Rival AI Cars (Rubber-banding + Traffic Avoidance)
+    var rivalsAhead = 0;
+    for (var r = 0; r < rivals.length; r++) {
+      var rv = rivals[r];
+      var distToPlayer = rv.z - player.z;
+
+      // Rubber-banding tuned for Level 1 (exciting close packs, beatable)
+      var rubberFactor = 1.0;
+      if (distToPlayer > 3200) {
+        rubberFactor = 0.86;
+      } else if (distToPlayer < -2600) {
+        rubberFactor = 1.15;
+      }
+
+      var rvSegIdx = Math.floor(rv.z / segLen) % segments.length;
+      var rvCurveSlowdown = Math.abs(segments[rvSegIdx].curve) > 2.6 ? 0.91 : 1.0;
+      var targetRvSpeed = rv.baseSkill * rubberFactor * rvCurveSlowdown;
+
+      rv.speed += (targetRvSpeed - rv.speed) * dt * 2.5;
+      rv.z += rv.speed * dt;
+
+      // Simple traffic avoidance for rivals
+      rv.laneTimer -= dt;
+      if (rv.laneTimer <= 0) {
+        rv.laneTimer = 0.6;
+        for (var tc = 0; tc < traffic.length; tc++) {
+          var tCar = traffic[tc];
+          if (tCar.z > rv.z && tCar.z - rv.z < 1800 && Math.abs(tCar.x - rv.x) < 0.36) {
+            rv.targetX = tCar.x > 0 ? -0.62 : 0.62;
+            break;
+          }
+        }
+      }
+      rv.x += (rv.targetX - rv.x) * dt * 2.8;
+
+      // Player-Rival Collision
+      if (Math.abs(rv.z - player.z) < 165 && Math.abs(rv.x - player.x) < 0.30) {
+        var pushDir = player.x < rv.x ? -1.8 : 1.8;
+        triggerCrash(pushDir, 0.78);
+        rv.x -= pushDir * 0.15;
+      }
+
+      if (rv.z > player.z) {
+        rivalsAhead++;
+      }
+    }
+    playerPosition = 1 + rivalsAhead;
+
+    // Update Procedural Racing Audio
+    var rpmNorm = (player.rpm - 1000) / 7200;
+    AudioSys.updateRacingAudio(
+      dt,
+      Math.max(0, Math.min(1, rpmNorm)),
+      hasThrottle ? 1 : 0,
+      player.isDrifting,
+      player.isOffroad,
+      player.isBoosting,
+      player.shiftTimer
+    );
+  }
+
+  function updateGearAndRPM(hasThrottle) {
+    if (player.speed < -80) {
+      player.gear = -1; // Reverse
+      player.rpm = 1800 + (Math.abs(player.speed) / 2800) * 4500;
+      return;
+    }
+    if (player.speed < 80 && !hasThrottle) {
+      player.gear = 0; // Neutral
+      player.rpm = 1050;
+      return;
+    }
+
+    var thresholds = [0, 2100, 4200, 6400, 8600, 10600, 15500];
+    var newGear = 1;
+    for (var g = 1; g <= 6; g++) {
+      if (player.speed >= thresholds[g - 1]) {
+        newGear = g;
+      }
+    }
+    if (newGear !== player.gear) {
+      if (newGear > player.gear) {
+        player.shiftTimer = 0.14;
+      }
+      player.gear = newGear;
+    }
+
+    var gMin = thresholds[player.gear - 1] * 0.72;
+    var gMax = thresholds[player.gear];
+    var ratio = (player.speed - gMin) / Math.max(1, gMax - gMin);
+    player.rpm = 1800 + Math.max(0, Math.min(1.04, ratio)) * 6200;
+  }
+
+  function triggerCrash(bounceDir, speedRetention) {
+    player.speed *= speedRetention;
+    player.bounceX = bounceDir;
+    player.shakeTime = 0.35;
+    player.shakeMag = 14;
+    AudioSys.playCrash();
+
+    // Spawn bright crash sparks
+    for (var i = 0; i < 16; i++) {
+      spawnParticle(
+        2,
+        WIDTH * 0.5 + (Math.random() - 0.5) * 70,
+        HEIGHT - 75 + (Math.random() - 0.5) * 30,
+        (Math.random() - 0.5) * 420,
+        -120 - Math.random() * 240,
+        6,
+        0.38,
+        (i % 2 === 0) ? "#fffa65" : "#ff9f1a"
+      );
+    }
+  }
+
+  // ============================================================================
+  // 11. RENDERING: BEHIND-CAR PSEUDO-3D VIEW
+  // ============================================================================
+  var camDepth = 1 / Math.tan((LEVELS[0].fov * 0.5) * Math.PI / 180);
+
+  function renderPseudo3D() {
+    var lvl = currentLevel;
+    var segLen = lvl.segmentLength;
+
+    var camZ = (gameState === STATE_INTRO && introPhase === 0) ? introCamZ : player.z;
+    var camX = (gameState === STATE_INTRO && introPhase === 0) ? Math.sin(introTimer * 0.8) * 600 : (player.x * lvl.roadWidth);
+
+    var baseSegIdx = Math.floor(camZ / segLen) % segments.length;
+    var basePercent = (camZ % segLen) / segLen;
+    var baseSeg = segments[baseSegIdx];
+
+    var playerElevation = easeInOut(baseSeg.y, baseSeg.nextY, basePercent);
+    var camY = lvl.cameraHeight + playerElevation + ((gameState === STATE_INTRO && introPhase === 0) ? 450 : 0);
+
+    // Camera Shake offset
+    var shakeX = 0, shakeY = 0;
+    if (player.shakeTime > 0) {
+      shakeX = (Math.random() - 0.5) * player.shakeMag * 2;
+      shakeY = (Math.random() - 0.5) * player.shakeMag * 2;
+    }
+
+    ctx.save();
+    if (shakeX !== 0 || shakeY !== 0) {
+      ctx.translate(shakeX, shakeY);
+    }
+
+    // 1. Draw Sunset Sky & Parallax Coastal Mountains
+    ctx.drawImage(Sprites.sky, 0, 0);
+
+    var parallaxOffset = Math.floor((baseSeg.Index || baseSegIdx) * 2.5 + camX * 0.04) % WIDTH;
+    if (parallaxOffset < 0) parallaxOffset += WIDTH;
+    ctx.drawImage(Sprites.mountains, -parallaxOffset, 215);
+    ctx.drawImage(Sprites.mountains, WIDTH - parallaxOffset, 215);
+
+    // Fill ground base below horizon
+    ctx.fillStyle = lvl.colors.sandDark;
+    ctx.fillRect(0, 365, WIDTH, HEIGHT - 365);
+
+    // 2. Project & Render Road Segments Front-to-Back (with horizon clipping)
+    var maxY = HEIGHT;
+    var x = 0;
+    var dx = -(baseSeg.curve * basePercent);
+
+    for (var n = 0; n < lvl.drawDistance; n++) {
+      var seg = segments[(baseSegIdx + n) % segments.length];
+      var projCamZ = camZ;
+      if (seg.index < baseSegIdx) {
+        projCamZ -= trackLength;
+      }
+
+      // Project near and far edges of segment
+      var z1 = seg.z - projCamZ;
+      var z2 = (seg.z + segLen) - projCamZ;
+      if (z1 <= 10) z1 = 10;
+      if (z2 <= 10) continue;
+
+      var scale1 = camDepth / z1;
+      var scale2 = camDepth / z2;
+
+      var sx1 = Math.floor(WIDTH * 0.5 + (scale1 * (x - camX)) * WIDTH * 0.5);
+      var sy1 = Math.floor(HEIGHT * 0.5 - (scale1 * (seg.y - camY)) * HEIGHT * 0.5);
+      var sw1 = Math.floor(scale1 * lvl.roadWidth * WIDTH * 0.5);
+
+      var sx2 = Math.floor(WIDTH * 0.5 + (scale2 * (x + dx - camX)) * WIDTH * 0.5);
+      var sy2 = Math.floor(HEIGHT * 0.5 - (scale2 * (seg.nextY - camY)) * HEIGHT * 0.5);
+      var sw2 = Math.floor(scale2 * lvl.roadWidth * WIDTH * 0.5);
+
+      // Save projection for sprite pass
+      seg.projX = sx1;
+      seg.projY = sy1;
+      seg.projW = sw1;
+      seg.projScale = scale1;
+      seg.clipY = maxY;
+
+      x += dx;
+      dx += seg.curve;
+
+      if (sy1 <= sy2 || sy2 >= maxY) {
+        continue;
+      }
+
+      var isLight = Math.floor(seg.index / 3) % 2 === 0;
+
+      // Coastal Ocean Water on Left / Sand & Cliffs on Right
+      ctx.fillStyle = isLight ? lvl.colors.waterLight : lvl.colors.waterDark;
+      ctx.fillRect(0, sy2, sx2 - sw2, sy1 - sy2);
+
+      ctx.fillStyle = isLight ? lvl.colors.sandLight : lvl.colors.sandDark;
+      ctx.fillRect(sx2 - sw2 * 1.4, sy2, WIDTH - (sx2 - sw2 * 1.4), sy1 - sy2);
+
+      // Rumble strips
+      var r1 = sw1 * 1.16;
+      var r2 = sw2 * 1.16;
+      drawQuad(sx1 - r1, sy1, sx1 + r1, sy1, sx2 + r2, sy2, sx2 - r2, sy2, isLight ? lvl.colors.rumbleLight : lvl.colors.rumbleDark);
+
+      // Asphalt road surface
+      drawQuad(sx1 - sw1, sy1, sx1 + sw1, sy1, sx2 + sw2, sy2, sx2 - sw2, sy2, isLight ? lvl.colors.roadLight : lvl.colors.roadDark);
+
+      // Finish or Checkpoint checkerboard strip on road
+      if (seg.isCheckpoint || seg.isFinish) {
+        drawQuad(sx1 - sw1, sy1, sx1 + sw1, sy1, sx2 + sw2, sy2, sx2 - sw2, sy2, seg.isFinish ? "#ffbe18" : "#48dbfb");
+      } else if (isLight) {
+        // Dashed lane markers
+        var lw1 = Math.max(2, sw1 * 0.035);
+        var lw2 = Math.max(1, sw2 * 0.035);
+        var lane1X1 = sx1 - sw1 * 0.33;
+        var lane1X2 = sx2 - sw2 * 0.33;
+        var lane2X1 = sx1 + sw1 * 0.33;
+        var lane2X2 = sx2 + sw2 * 0.33;
+        drawQuad(lane1X1 - lw1, sy1, lane1X1 + lw1, sy1, lane1X2 + lw2, sy2, lane1X2 - lw2, sy2, lvl.colors.laneLight);
+        drawQuad(lane2X1 - lw1, sy1, lane2X1 + lw1, sy1, lane2X2 + lw2, sy2, lane2X2 - lw2, sy2, lvl.colors.laneLight);
+      }
+
+      maxY = sy2;
+    }
+
+    // 3. Render Roadside Objects, Checkpoint Arches, Traffic & Rivals Back-to-Front
+    for (var b = lvl.drawDistance - 1; b >= 1; b--) {
+      var bSeg = segments[(baseSegIdx + b) % segments.length];
+      if (bSeg.projScale <= 0) continue;
+
+      // Overhead Checkpoint / Finish Gantry Arch
+      if (bSeg.isCheckpoint || bSeg.isFinish) {
+        drawOverheadArch3D(bSeg, bSeg.isFinish);
+      }
+
+      // Roadside Props
+      for (var s = 0; s < bSeg.sprites.length; s++) {
+        var sp = bSeg.sprites[s];
+        var spriteX = bSeg.projX + bSeg.projW * sp.offset;
+        var spriteY = bSeg.projY;
+        drawRoadsideProp3D(sp.type, spriteX, spriteY, bSeg.projW, bSeg.clipY);
+      }
+
+      // Traffic cars on this segment
+      for (var tc = 0; tc < traffic.length; tc++) {
+        var tr = traffic[tc];
+        var trSegIdx = Math.floor(tr.z / segLen) % segments.length;
+        if (trSegIdx === bSeg.index) {
+          drawVehicle3D(tr.sprite, bSeg, tr.x, false);
+        }
+      }
+
+      // Rival AI cars on this segment
+      for (var rc = 0; rc < rivals.length; rc++) {
+        var rv = rivals[rc];
+        var rvSegIdx = Math.floor(rv.z / segLen) % segments.length;
+        if (rvSegIdx === bSeg.index) {
+          drawVehicle3D(rv.sprite, bSeg, rv.x, true, rv.name);
+        }
+      }
+
+      // During Intro Flyover, also draw Player Car on starting grid
+      if (gameState === STATE_INTRO && introPhase === 0) {
+        var pSegIdx = Math.floor(player.z / segLen) % segments.length;
+        if (pSegIdx === bSeg.index) {
+          drawVehicle3D(Sprites.playerCar, bSeg, player.x, true, "YOU");
+        }
+      }
+    }
+
+    // 4. Atmospheric Sun Rays & Headlight Cone
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    // Diagonal sunset light ray
+    ctx.fillStyle = "rgba(255, 185, 80, 0.055)";
+    ctx.beginPath();
+    ctx.moveTo(310, 240);
+    ctx.lineTo(460, 240);
+    ctx.lineTo(860, HEIGHT);
+    ctx.lineTo(120, HEIGHT);
+    ctx.closePath();
+    ctx.fill();
+
+    // Player Car Headlight Beams on Road
+    if (gameState !== STATE_INTRO || introPhase === 1) {
+      ctx.fillStyle = "rgba(255, 245, 195, 0.09)";
+      ctx.beginPath();
+      ctx.moveTo(WIDTH * 0.5 - 50, HEIGHT - 82);
+      ctx.lineTo(WIDTH * 0.5 - 240, HEIGHT - 230);
+      ctx.lineTo(WIDTH * 0.5 + 240, HEIGHT - 230);
+      ctx.lineTo(WIDTH * 0.5 + 50, HEIGHT - 82);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Nitro Speed Streaks at Screen Edges
+    if (player.isBoosting) {
+      ctx.strokeStyle = "rgba(72, 219, 251, 0.45)";
+      ctx.lineWidth = 3;
+      for (var ns = 0; ns < 12; ns++) {
+        var ang = (ns / 12) * Math.PI * 2 + totalRaceTime * 5;
+        var rx1 = WIDTH * 0.5 + Math.cos(ang) * 340;
+        var ry1 = HEIGHT * 0.55 + Math.sin(ang) * 190;
+        var rx2 = WIDTH * 0.5 + Math.cos(ang) * 660;
+        var ry2 = HEIGHT * 0.55 + Math.sin(ang) * 380;
+        ctx.beginPath();
+        ctx.moveTo(rx1, ry1);
+        ctx.lineTo(rx2, ry2);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+
+    // 5. Render Player Car (unless in Intro Flyover)
+    if (gameState !== STATE_INTRO || introPhase === 1) {
+      drawPlayerCar3D();
+    }
+
+    // 6. Render Particles (Smoke, Sand Dust, Crash Sparks, Nitro Flames)
+    renderParticles();
+
+    ctx.restore();
+  }
+
+  function drawQuad(x1, y1, x2, y2, x3, y3, x4, y4, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.lineTo(x3, y3);
+    ctx.lineTo(x4, y4);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawRoadsideProp3D(type, x, y, roadW, clipY) {
+    if (y <= 150 || x < -300 || x > WIDTH + 300) return;
+    var img = null;
+    var scaleW = 0, scaleH = 0;
+
+    if (type === "palm") {
+      img = Sprites.palmTree;
+      scaleW = roadW * 0.65;
+      scaleH = scaleW * 1.44;
+    } else if (type === "boulder") {
+      img = Sprites.boulder;
+      scaleW = roadW * 0.55;
+      scaleH = scaleW * 0.68;
+    } else if (type === "lamp") {
+      img = Sprites.streetLamp;
+      scaleW = roadW * 0.42;
+      scaleH = scaleW * 2.33;
+    } else if (type === "sign") {
+      img = Sprites.signChevron;
+      scaleW = roadW * 0.25;
+      scaleH = scaleW * 1.44;
+    } else if (type === "billboard") {
+      img = Sprites.billboard;
+      scaleW = roadW * 0.72;
+      scaleH = scaleW * 0.68;
+    }
+
+    if (!img || scaleW < 4) return;
+    var destX = x - scaleW * 0.5;
+    var destY = y - scaleH;
+    var clipH = Math.max(0, y - clipY);
+    if (clipH >= scaleH) return;
+
+    var srcH = img.height * (1 - clipH / scaleH);
+    ctx.drawImage(img, 0, 0, img.width, srcH, destX, destY, scaleW, scaleH - clipH);
+  }
+
+  function drawOverheadArch3D(seg, isFinish) {
+    var x = seg.projX;
+    var y = seg.projY;
+    var w = seg.projW * 1.15;
+    var h = seg.projW * 0.68;
+    if (w < 12 || y > seg.clipY + 20) return;
+
+    // Pillars
+    ctx.fillStyle = "#1e272e";
+    var pw = Math.max(4, w * 0.08);
+    ctx.fillRect(x - w, y - h, pw, h);
+    ctx.fillRect(x + w - pw, y - h, pw, h);
+
+    // Overhead Banner
+    var bh = Math.max(8, h * 0.26);
+    ctx.fillStyle = isFinish ? "#ff3838" : "#0abde3";
+    ctx.fillRect(x - w, y - h, w * 2, bh);
+
+    if (w > 90) {
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold " + Math.floor(bh * 0.65) + "px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(isFinish ? "FINISH LINE" : "CHECKPOINT", x, y - h + bh * 0.74);
+    }
+  }
+
+  function drawVehicle3D(sprite, seg, offset, isRival, label) {
+    var x = seg.projX + seg.projW * offset;
+    var y = seg.projY;
+    var carW = seg.projW * 0.40;
+    var carH = carW * (sprite.height / sprite.width);
+    if (carW < 6) return;
+
+    var destX = x - carW * 0.5;
+    var destY = y - carH;
+    var clipH = Math.max(0, y - seg.clipY);
+    if (clipH >= carH) return;
+
+    var srcH = sprite.height * (1 - clipH / carH);
+    ctx.drawImage(sprite, 0, 0, sprite.width, srcH, destX, destY, carW, carH - clipH);
+
+    // Rival name tag above car when close
+    if (isRival && label && carW > 38 && destY > 180) {
+      ctx.fillStyle = "rgba(0,0,0,0.65)";
+      ctx.fillRect(x - 32, destY - 22, 64, 18);
+      ctx.fillStyle = "#ffcb5c";
+      ctx.font = "bold 13px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(label, x, destY - 8);
+    }
+  }
+
+  function drawPlayerCar3D() {
+    var carW = 248;
+    var carH = 148;
+    var cx = WIDTH * 0.5;
+    var cy = HEIGHT - 96 + (player.speed > 500 ? Math.sin(totalRaceTime * 28) * 1.8 : 0);
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(player.driftAngle * 0.14);
+
+    // Nitro dual blue exhaust flames
+    if (player.isBoosting) {
+      ctx.drawImage(Sprites.glowCyan, -85, -10, 95, 95);
+      ctx.drawImage(Sprites.glowCyan, -10, -10, 95, 95);
+    } else if (keys.down) {
+      // Bright brake light glow
+      ctx.drawImage(Sprites.glowWarm, -105, -28, 80, 80);
+      ctx.drawImage(Sprites.glowWarm, 25, -28, 80, 80);
+    }
+
+    ctx.drawImage(Sprites.playerCar, -carW * 0.5, -carH * 0.5, carW, carH);
+    ctx.restore();
+  }
+
+  // ============================================================================
+  // 12. RENDERING: TOP-DOWN CAMERA VIEW (Same Game State!)
+  // ============================================================================
+  function renderTopDown() {
+    var lvl = currentLevel;
+    var segLen = lvl.segmentLength;
+    var camZ = (gameState === STATE_INTRO && introPhase === 0) ? introCamZ : player.z;
+    var baseSegIdx = Math.floor(camZ / segLen) % segments.length;
+    var basePercent = (camZ % segLen) / segLen;
+
+    // Background Coastal Water (left) and Sandy Cliff (right)
+    ctx.fillStyle = lvl.colors.waterDark;
+    ctx.fillRect(0, 0, WIDTH * 0.45, HEIGHT);
+    ctx.fillStyle = lvl.colors.sandDark;
+    ctx.fillRect(WIDTH * 0.35, 0, WIDTH * 0.65, HEIGHT);
+
+    // Compute road spine coordinates going up the screen
+    var numVis = 48;
+    var stepY = 16;
+    var originY = HEIGHT - 135 + basePercent * stepY;
+    var spine = [];
+    var curX = WIDTH * 0.5 - player.x * 165;
+    var curHeading = 0;
+
+    for (var i = -8; i < numVis; i++) {
+      var sIdx = (baseSegIdx + i + segments.length) % segments.length;
+      var seg = segments[sIdx];
+      if (i >= 0) {
+        curHeading += seg.curve * 0.011;
+        curX += Math.sin(curHeading) * 18;
+      } else {
+        curX -= Math.sin(curHeading) * 18;
+      }
+      var sy = originY - i * stepY;
+      spine.push({
+        seg: seg,
+        x: curX,
+        y: sy,
+        angle: curHeading
+      });
+    }
+
+    var roadHalfW = 195;
+
+    // Draw Road Segments in Top-Down
+    for (var k = 0; k < spine.length - 1; k++) {
+      var p1 = spine[k];
+      var p2 = spine[k + 1];
+      var isLight = Math.floor(p1.seg.index / 3) % 2 === 0;
+
+      // Beach shoreline strip on left
+      drawQuad(
+        0, p1.y, p1.x - roadHalfW * 1.15, p1.y,
+        p2.x - roadHalfW * 1.15, p2.y, 0, p2.y,
+        isLight ? lvl.colors.waterLight : lvl.colors.waterDark
+      );
+
+      // Rumble strips
+      drawQuad(
+        p1.x - roadHalfW * 1.14, p1.y, p1.x + roadHalfW * 1.14, p1.y,
+        p2.x + roadHalfW * 1.14, p2.y, p2.x - roadHalfW * 1.14, p2.y,
+        isLight ? lvl.colors.rumbleLight : lvl.colors.rumbleDark
+      );
+
+      // Asphalt
+      var roadCol = isLight ? lvl.colors.roadLight : lvl.colors.roadDark;
+      if (p1.seg.isFinish) roadCol = "#ffbe18";
+      else if (p1.seg.isCheckpoint) roadCol = "#48dbfb";
+
+      drawQuad(
+        p1.x - roadHalfW, p1.y, p1.x + roadHalfW, p1.y,
+        p2.x + roadHalfW, p2.y, p2.x - roadHalfW, p2.y,
+        roadCol
+      );
+
+      // Lane Dividers
+      if (isLight && !p1.seg.isCheckpoint && !p1.seg.isFinish) {
+        var l1a = p1.x - roadHalfW * 0.33, l1b = p2.x - roadHalfW * 0.33;
+        var l2a = p1.x + roadHalfW * 0.33, l2b = p2.x + roadHalfW * 0.33;
+        drawQuad(l1a - 3, p1.y, l1a + 3, p1.y, l1b + 3, p2.y, l1b - 3, p2.y, lvl.colors.laneLight);
+        drawQuad(l2a - 3, p1.y, l2a + 3, p1.y, l2b + 3, p2.y, l2b - 3, p2.y, lvl.colors.laneLight);
+      }
+
+      // Top-down roadside palm canopies & rocks
+      for (var sp = 0; sp < p1.seg.sprites.length; sp++) {
+        var prop = p1.seg.sprites[sp];
+        var px = p1.x + prop.offset * roadHalfW;
+        if (prop.type === "palm") {
+          ctx.fillStyle = "#1b3b2b";
+          ctx.beginPath();
+          ctx.arc(px, p1.y, 18, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#2d5a40";
+          ctx.beginPath();
+          ctx.arc(px + 3, p1.y - 3, 11, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (prop.type === "boulder") {
+          ctx.fillStyle = "#5c3842";
+          ctx.fillRect(px - 14, p1.y - 10, 28, 20);
+        } else if (prop.type === "lamp") {
+          ctx.drawImage(Sprites.glowWarm, px - 28, p1.y - 28, 56, 56);
+        }
+      }
+    }
+
+    // Helper to convert world (z, x) to Top-Down screen coordinates
+    function worldToTopDown(wz, wx) {
+      var relSeg = (wz - camZ) / segLen;
+      var idx = Math.floor(relSeg) + 8;
+      if (idx < 0 || idx >= spine.length - 1) return null;
+      var frac = relSeg - Math.floor(relSeg);
+      var sA = spine[idx];
+      var sB = spine[idx + 1];
+      var sx = sA.x + (sB.x - sA.x) * frac + wx * roadHalfW;
+      var sy = sA.y + (sB.y - sA.y) * frac;
+      var ang = sA.angle + (sB.angle - sA.angle) * frac;
+      return { x: sx, y: sy, angle: ang };
+    }
+
+    // Draw Traffic Cars in Top-Down
+    for (var t = 0; t < traffic.length; t++) {
+      var tr = traffic[t];
+      var tPos = worldToTopDown(tr.z, tr.x);
+      if (tPos) {
+        drawTopDownCar(tPos.x, tPos.y, tPos.angle, "#dfe6e9", "#2d3436", null, false);
+      }
+    }
+
+    // Draw Rival Cars in Top-Down
+    var rivalColors = ["#0abde3", "#10ac84", "#8854d0", "#f39c12", "#c8d6e5"];
+    for (var r = 0; r < rivals.length; r++) {
+      var rv = rivals[r];
+      var rPos = worldToTopDown(rv.z, rv.x);
+      if (rPos) {
+        drawTopDownCar(rPos.x, rPos.y, rPos.angle, rivalColors[r % rivalColors.length], "#ffffff", rv.name, false);
+      }
+    }
+
+    // Draw Player Car in Top-Down
+    var pPos = worldToTopDown(player.z, player.x);
+    if (pPos) {
+      drawTopDownCar(pPos.x, pPos.y, pPos.angle + player.driftAngle * 0.32, "#e62e2d", "#ffcb5c", "YOU", player.isBoosting);
+    }
+
+    renderParticles();
+  }
+
+  function drawTopDownCar(x, y, angle, color, stripeColor, label, isBoosting) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+
+    // Headlight beams
+    ctx.fillStyle = "rgba(255, 245, 190, 0.16)";
+    ctx.beginPath();
+    ctx.moveTo(-12, -26);
+    ctx.lineTo(-34, -110);
+    ctx.lineTo(34, -110);
+    ctx.lineTo(12, -26);
+    ctx.closePath();
+    ctx.fill();
+
+    // Nitro flame
+    if (isBoosting) {
+      ctx.drawImage(Sprites.glowCyan, -32, 10, 64, 64);
+    }
+
+    // Car shadow & chassis
+    ctx.fillStyle = "rgba(0,0,0,0.45)";
+    ctx.fillRect(-17, -25, 38, 54);
+
+    ctx.fillStyle = color;
+    ctx.fillRect(-16, -26, 32, 52);
+
+    ctx.fillStyle = stripeColor;
+    ctx.fillRect(-4, -26, 8, 52);
+
+    // Windshield
+    ctx.fillStyle = "#1e272e";
+    ctx.fillRect(-12, -12, 24, 18);
+
+    ctx.restore();
+
+    if (label) {
+      ctx.fillStyle = "#ffcb5c";
+      ctx.font = "bold 13px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(label, x, y - 34);
+    }
+  }
+
+  function renderParticles() {
+    for (var i = 0; i < MAX_PARTICLES; i++) {
+      var p = particles[i];
+      if (!p.active) continue;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, p.alpha);
+      ctx.fillStyle = p.color;
+      if (p.type === 2) {
+        // Sparks
+        ctx.fillRect(p.x - p.size * 0.5, p.y - p.size * 0.5, p.size, p.size);
+      } else {
+        // Smoke / Dust / Flame circle
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  // ============================================================================
+  // 13. FULL SOFA-READABLE HUD & CINEMATIC INTRO OVERLAYS
+  // ============================================================================
+  function renderHUD() {
+    var segLen = currentLevel.segmentLength;
+    var finishZ = checkpointSegments[checkpointSegments.length - 1] * segLen;
+    var progressPct = Math.min(100, Math.max(0, Math.floor((player.z / finishZ) * 100)));
+
+    // 1. TOP-LEFT: MINIMAP (Track Shape + Rivals + Player) & BEST TIME
+    var mmX = 24;
+    var mmY = 22;
+    ctx.drawImage(minimapCanvas, mmX, mmY);
+
+    // Draw Rival dots on Minimap
+    var rivalCols = ["#0abde3", "#10ac84", "#8854d0", "#f39c12", "#c8d6e5"];
+    for (var r = 0; r < rivals.length; r++) {
+      var rIdx = Math.min(minimapPoints.length - 1, Math.max(0, Math.floor(rivals[r].z / segLen)));
+      var rPt = minimapPoints[rIdx];
+      ctx.fillStyle = rivalCols[r % rivalCols.length];
+      ctx.beginPath();
+      ctx.arc(mmX + rPt.sx, mmY + rPt.sy, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Draw Player dot on Minimap
+    var pIdx = Math.min(minimapPoints.length - 1, Math.max(0, Math.floor(player.z / segLen)));
+    var pPt = minimapPoints[pIdx];
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.arc(mmX + pPt.sx, mmY + pPt.sy, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#ff2e2e";
+    ctx.beginPath();
+    ctx.arc(mmX + pPt.sx, mmY + pPt.sy, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Best Time Badge below Minimap
+    ctx.fillStyle = "rgba(10, 14, 26, 0.80)";
+    ctx.fillRect(mmX, mmY + 166, 200, 38);
+    ctx.strokeStyle = "rgba(255, 180, 70, 0.45)";
+    ctx.strokeRect(mmX, mmY + 166, 200, 38);
+    ctx.fillStyle = "#ffcb5c";
+    ctx.font = "bold 18px sans-serif";
+    ctx.textAlign = "left";
+    var btStr = settings.bestTime !== null ? formatTime(settings.bestTime) : "--:--.--";
+    ctx.fillText("BEST: " + btStr, mmX + 12, mmY + 191);
+
+    // 2. TOP-CENTER: TIME REMAINING & NEXT CHECKPOINT DISTANCE
+    var tcX = WIDTH * 0.5;
+    ctx.fillStyle = "rgba(10, 14, 26, 0.84)";
+    ctx.fillRect(tcX - 165, 18, 330, 108);
+    ctx.strokeStyle = raceTimeLeft < 10 ? "#ff3838" : "rgba(255, 200, 90, 0.55)";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(tcX - 165, 18, 330, 108);
+
+    ctx.fillStyle = "#dcdde1";
+    ctx.font = "bold 16px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("TIME REMAINING", tcX, 40);
+
+    var timeWarning = (raceTimeLeft < 10 && Math.floor(totalRaceTime * 6) % 2 === 0);
+    ctx.fillStyle = timeWarning ? "#ff3838" : "#fffa65";
+    ctx.font = "bold 52px sans-serif";
+    ctx.fillText(raceTimeLeft.toFixed(1) + "s", tcX, 90);
+
+    // Distance to Next Checkpoint
+    var nextCpZ = checkpointSegments[Math.min(checkpointSegments.length - 1, nextCheckpointIdx)] * segLen;
+    var distMeters = Math.max(0, Math.floor((nextCpZ - player.z) * 0.05));
+    var cpLabel = (nextCheckpointIdx === checkpointSegments.length - 1) ? "FINISH LINE IN " : "NEXT CHECKPOINT: ";
+    ctx.fillStyle = "#48dbfb";
+    ctx.font = "bold 17px sans-serif";
+    ctx.fillText(cpLabel + distMeters + " m  (" + (nextCheckpointIdx + 1) + "/" + checkpointSegments.length + ")", tcX, 116);
+
+    // 3. TOP-RIGHT: RACE POSITION & STAGE PROGRESS BAR
+    var trX = WIDTH - 264;
+    ctx.fillStyle = "rgba(10, 14, 26, 0.84)";
+    ctx.fillRect(trX, 22, 240, 115);
+    ctx.strokeStyle = "rgba(255, 180, 70, 0.45)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(trX, 22, 240, 115);
+
+    ctx.fillStyle = "#dcdde1";
+    ctx.font = "bold 18px sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText("POSITION", trX + 18, 52);
+
+    ctx.fillStyle = playerPosition === 1 ? "#fffa65" : "#ffffff";
+    ctx.font = "bold 46px sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText(playerPosition + "/6", trX + 224, 64);
+
+    // Progress Bar
+    ctx.fillStyle = "#dcdde1";
+    ctx.font = "bold 16px sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText("STAGE PROGRESS: " + progressPct + "%", trX + 18, 94);
+
+    ctx.fillStyle = "#2f3640";
+    ctx.fillRect(trX + 18, 104, 204, 16);
+    ctx.fillStyle = "#ff9f43";
+    ctx.fillRect(trX + 18, 104, (204 * progressPct) / 100, 16);
+
+    // 4. BOTTOM-RIGHT: SPEEDOMETER, GEAR, RPM BAR & NITRO BAR
+    var brX = WIDTH - 355;
+    var brY = HEIGHT - 158;
+    ctx.fillStyle = "rgba(10, 14, 26, 0.86)";
+    ctx.fillRect(brX, brY, 330, 138);
+    ctx.strokeStyle = player.isBoosting ? "#48dbfb" : "rgba(255, 180, 70, 0.5)";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(brX, brY, 330, 138);
+
+    // Digital Speed (KM/H)
+    var kmh = Math.floor(Math.abs(player.speed) * 0.0235);
+    ctx.fillStyle = player.isBoosting ? "#48dbfb" : "#ffffff";
+    ctx.font = "bold 56px sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText(kmh, brX + 170, brY + 62);
+
+    ctx.fillStyle = "#ffcb5c";
+    ctx.font = "bold 18px sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText("KM/H", brX + 178, brY + 58);
+
+    // Gear Indicator Badge
+    ctx.fillStyle = "#222f3e";
+    ctx.fillRect(brX + 245, brY + 14, 68, 56);
+    ctx.strokeStyle = "#ff9f43";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(brX + 245, brY + 14, 68, 56);
+
+    var gearStr = player.gear === -1 ? "R" : (player.gear === 0 ? "N" : String(player.gear));
+    ctx.fillStyle = "#fffa65";
+    ctx.font = "bold 38px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(gearStr, brX + 279, brY + 55);
+
+    // RPM Bar
+    var rpmNorm = Math.max(0, Math.min(1, (player.rpm - 1000) / 7000));
+    ctx.fillStyle = "#dcdde1";
+    ctx.font = "bold 15px sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText("RPM", brX + 16, brY + 92);
+
+    ctx.fillStyle = "#2f3640";
+    ctx.fillRect(brX + 72, brY + 78, 240, 16);
+    var rpmColor = rpmNorm > 0.85 ? "#ff3838" : (rpmNorm > 0.6 ? "#ffbe18" : "#2ed573");
+    ctx.fillStyle = rpmColor;
+    ctx.fillRect(brX + 72, brY + 78, 240 * rpmNorm, 16);
+
+    // NITRO Bar
+    ctx.fillStyle = "#48dbfb";
+    ctx.font = "bold 15px sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText("NITRO", brX + 16, brY + 120);
+
+    ctx.fillStyle = "#2f3640";
+    ctx.fillRect(brX + 72, brY + 106, 240, 18);
+    ctx.fillStyle = player.isBoosting ? "#ffffff" : "#00d2d3";
+    ctx.fillRect(brX + 72, brY + 106, 240 * (player.nitro / 100), 18);
+
+    ctx.fillStyle = "#0a0e1a";
+    ctx.font = "bold 13px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(player.isBoosting ? "BOOSTING!" : "PRESS OK FOR NITRO", brX + 192, brY + 120);
+
+    // 5. DRIFT / NEAR-MISS / CHECKPOINT POPUP BANNER
+    if (hudPopupTimer > 0) {
+      ctx.fillStyle = "rgba(10, 14, 26, 0.85)";
+      ctx.fillRect(tcX - 240, 140, 480, 44);
+      ctx.strokeStyle = hudPopupColor;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(tcX - 240, 140, 480, 44);
+      ctx.fillStyle = hudPopupColor;
+      ctx.font = "bold 24px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(hudPopupText, tcX, 170);
+    } else if (player.isDrifting) {
+      ctx.fillStyle = "rgba(10, 14, 26, 0.82)";
+      ctx.fillRect(tcX - 150, 140, 300, 40);
+      ctx.fillStyle = "#ff9f43";
+      ctx.font = "bold 22px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("DRIFTING! +NITRO CHARGE", tcX, 167);
+    }
+  }
+
+  function renderIntroOverlay() {
+    // Letterbox cinema bars
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(0, 0, WIDTH, 92);
+    ctx.fillRect(0, HEIGHT - 92, WIDTH, 92);
+
+    if (introPhase === 0) {
+      // Fade in/out Stage Title
+      var alpha = 1.0;
+      if (introTimer < 0.8) alpha = introTimer / 0.8;
+      else if (introTimer > 4.2) alpha = Math.max(0, (5.2 - introTimer) / 1.0);
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = "rgba(10, 14, 26, 0.78)";
+      ctx.fillRect(WIDTH * 0.5 - 390, HEIGHT * 0.5 - 85, 780, 150);
+      ctx.strokeStyle = "#ffcb5c";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(WIDTH * 0.5 - 390, HEIGHT * 0.5 - 85, 780, 150);
+
+      ctx.fillStyle = "#ffcb5c";
+      ctx.font = "bold 40px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(currentLevel.name, WIDTH * 0.5, HEIGHT * 0.5 - 18);
+
+      ctx.fillStyle = "#48dbfb";
+      ctx.font = "bold 22px sans-serif";
+      ctx.fillText(currentLevel.subtitle, WIDTH * 0.5, HEIGHT * 0.5 + 32);
+      ctx.restore();
+
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 22px sans-serif";
+      ctx.textAlign = "right";
+      ctx.fillText("PRESS [OK] TO SKIP INTRO", WIDTH - 40, HEIGHT - 36);
+    } else {
+      // 3 - 2 - 1 - GO Countdown
+      var rem = 3.5 - introTimer;
+      var num = Math.ceil(rem);
+      var text = num > 0 ? String(num) : "GO!";
+      var col = num > 0 ? "#ffcb5c" : "#2ed573";
+
+      ctx.fillStyle = "rgba(10, 14, 26, 0.82)";
+      ctx.fillRect(WIDTH * 0.5 - 160, HEIGHT * 0.5 - 95, 320, 160);
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 4;
+      ctx.strokeRect(WIDTH * 0.5 - 160, HEIGHT * 0.5 - 95, 320, 160);
+
+      ctx.fillStyle = col;
+      ctx.font = "bold 104px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(text, WIDTH * 0.5, HEIGHT * 0.5 + 22);
+    }
+  }
+
+  // ============================================================================
+  // 14. MENU & SPLASH SCREEN RENDERERS
+  // ============================================================================
+  function renderSplashScreen(timeSec) {
+    ctx.drawImage(Sprites.sky, 0, 0, WIDTH, HEIGHT * 0.65);
+    ctx.drawImage(Sprites.mountains, 0, HEIGHT * 0.45, WIDTH, 200);
+    ctx.fillStyle = "#191326";
+    ctx.fillRect(0, HEIGHT * 0.65, WIDTH, HEIGHT * 0.35);
+
+    // Central Card
+    var bx = WIDTH * 0.5 - 430;
+    var by = 85;
+    var bw = 860;
+    var bh = 550;
+    ctx.fillStyle = "rgba(12, 16, 30, 0.92)";
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeStyle = "#ff9f43";
+    ctx.lineWidth = 4;
+    ctx.strokeRect(bx, by, bw, bh);
+
+    ctx.fillStyle = "#ffcb5c";
+    ctx.font = "bold 62px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("SUNSET COAST TURBO", WIDTH * 0.5, by + 95);
+
+    ctx.fillStyle = "#48dbfb";
+    ctx.font = "bold 24px sans-serif";
+    ctx.fillText("SMART TV EDITION • STAGE 1 TEST BUILD", WIDTH * 0.5, by + 140);
+
+    // Remote Controls Guide Box
+    ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
+    ctx.fillRect(bx + 70, by + 175, bw - 140, 235);
+
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 24px sans-serif";
+    ctx.fillText("TV REMOTE CONTROLS", WIDTH * 0.5, by + 215);
+
+    ctx.font = "bold 21px sans-serif";
+    ctx.fillStyle = "#dcdde1";
+    ctx.fillText("UP ARROW : Accelerate (Auto-Gearbox + Cruise Assist)", WIDTH * 0.5, by + 258);
+    ctx.fillText("LEFT / RIGHT ARROWS : Steer & High-Speed Drift", WIDTH * 0.5, by + 294);
+    ctx.fillText("DOWN ARROW : Brake / Reverse", WIDTH * 0.5, by + 330);
+    ctx.fillText("OK / ENTER BUTTON : Activate Nitro Boost", WIDTH * 0.5, by + 366);
+    ctx.fillText("RETURN / BACK : Pause & Switch Camera View", WIDTH * 0.5, by + 400);
+
+    // Pulsing Press OK Prompt
+    if (Math.floor(timeSec * 2.5) % 2 === 0) {
+      ctx.fillStyle = "#2ed573";
+      ctx.font = "bold 36px sans-serif";
+      ctx.fillText("PRESS [OK] ON REMOTE TO START", WIDTH * 0.5, by + 490);
+    }
+  }
+
+  function formatOptionLabel(label) {
+    if (label === "CAMERA VIEW") {
+      return "CAMERA VIEW : " + (settings.cameraView === CAM_CHASE ? "BEHIND CAR (3D)" : "TOP-DOWN");
+    }
+    if (label === "SOUND") {
+      return "SOUND : " + (settings.soundEnabled ? "ON" : "OFF");
+    }
+    return label;
+  }
+
+  function renderModalMenu(title, subtitle, items) {
+    ctx.fillStyle = "rgba(5, 8, 18, 0.78)";
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+    var mw = 680;
+    var mh = 190 + items.length * 72;
+    var mx = (WIDTH - mw) * 0.5;
+    var my = (HEIGHT - mh) * 0.5;
+
+    ctx.fillStyle = "rgba(16, 22, 40, 0.96)";
+    ctx.fillRect(mx, my, mw, mh);
+    ctx.strokeStyle = "#ffcb5c";
+    ctx.lineWidth = 4;
+    ctx.strokeRect(mx, my, mw, mh);
+
+    ctx.fillStyle = "#ffcb5c";
+    ctx.font = "bold 46px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(title, WIDTH * 0.5, my + 68);
+
+    ctx.fillStyle = "#48dbfb";
+    ctx.font = "bold 20px sans-serif";
+    ctx.fillText(subtitle, WIDTH * 0.5, my + 105);
+
+    for (var i = 0; i < items.length; i++) {
+      var iy = my + 135 + i * 70;
+      var isSelected = (i === menuCursor);
+
+      ctx.fillStyle = isSelected ? "#ff9f43" : "rgba(255, 255, 255, 0.08)";
+      ctx.fillRect(mx + 60, iy, mw - 120, 54);
+      if (isSelected) {
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 3;
+        ctx.strokeRect(mx + 60, iy, mw - 120, 54);
+      }
+
+      ctx.fillStyle = isSelected ? "#0a0e1a" : "#ffffff";
+      ctx.font = "bold 26px sans-serif";
+      ctx.fillText(formatOptionLabel(items[i].label), WIDTH * 0.5, iy + 36);
+    }
+
+    ctx.fillStyle = "#a4b0be";
+    ctx.font = "bold 18px sans-serif";
+    ctx.fillText("Navigate: UP / DOWN   •   Select: OK", WIDTH * 0.5, my + mh - 18);
+  }
+
+  function renderResultsScreen() {
+    ctx.fillStyle = "rgba(5, 8, 18, 0.84)";
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+    var mw = 740;
+    var mh = 510;
+    var mx = (WIDTH - mw) * 0.5;
+    var my = (HEIGHT - mh) * 0.5;
+
+    ctx.fillStyle = "rgba(16, 22, 40, 0.96)";
+    ctx.fillRect(mx, my, mw, mh);
+    ctx.strokeStyle = raceWon ? "#2ed573" : "#ff3838";
+    ctx.lineWidth = 4;
+    ctx.strokeRect(mx, my, mw, mh);
+
+    ctx.fillStyle = raceWon ? "#2ed573" : "#ff3838";
+    ctx.font = "bold 50px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(raceWon ? "STAGE 1 COMPLETE!" : "TIME EXPIRED!", WIDTH * 0.5, my + 75);
+
+    var ordinals = ["1ST", "2ND", "3RD", "4TH", "5TH", "6TH"];
+    var posText = ordinals[Math.max(0, Math.min(5, playerPosition - 1))] + " PLACE  (" + playerPosition + " / 6)";
+
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 32px sans-serif";
+    ctx.fillText("FINAL POSITION : " + posText, WIDTH * 0.5, my + 145);
+
+    ctx.fillStyle = "#ffcb5c";
+    ctx.font = "bold 30px sans-serif";
+    ctx.fillText("RACE TIME : " + formatTime(totalRaceTime), WIDTH * 0.5, my + 198);
+
+    var bestStr = settings.bestTime !== null ? formatTime(settings.bestTime) : "--:--.--";
+    ctx.fillStyle = "#48dbfb";
+    ctx.fillText("BEST TIME : " + bestStr + (newRecord ? "  (NEW RECORD!)" : ""), WIDTH * 0.5, my + 248);
+
+    for (var i = 0; i < resultsMenuItems.length; i++) {
+      var iy = my + 295 + i * 74;
+      var isSelected = (i === menuCursor);
+
+      ctx.fillStyle = isSelected ? "#ff9f43" : "rgba(255, 255, 255, 0.08)";
+      ctx.fillRect(mx + 110, iy, mw - 220, 56);
+      if (isSelected) {
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 3;
+        ctx.strokeRect(mx + 110, iy, mw - 220, 56);
+      }
+
+      ctx.fillStyle = isSelected ? "#0a0e1a" : "#ffffff";
+      ctx.font = "bold 26px sans-serif";
+      ctx.fillText(resultsMenuItems[i].label, WIDTH * 0.5, iy + 37);
+    }
+  }
+
+  function formatTime(sec) {
+    var mins = Math.floor(sec / 60);
+    var rem = sec % 60;
+    var sStr = rem < 10 ? "0" + rem.toFixed(2) : rem.toFixed(2);
+    return mins + ":" + sStr;
+  }
+
+  // ============================================================================
+  // 15. MAIN DELTA-TIME GAME LOOP
+  // ============================================================================
+  buildTrack(currentLevel);
+  var lastFrameTime = performance.now();
+
+  function gameLoop(now) {
+    var dt = (now - lastFrameTime) * 0.001;
+    lastFrameTime = now;
+    // Clamp delta-time to prevent physics jumps on tab switch or lag spike
+    if (dt > 0.08) dt = 0.08;
+    if (dt < 0.001) dt = 0.001;
+
+    // Update Music
+    if (gameState !== STATE_SPLASH) {
+      AudioSys.updateMusic(dt, gameState === STATE_RACING || gameState === STATE_INTRO);
+    }
+
+    // Update Game State
+    if (gameState === STATE_INTRO) {
+      updateIntro(dt);
+      updateParticles(dt);
+    } else if (gameState === STATE_RACING) {
+      updateRacing(dt);
+      updateParticles(dt);
+    }
+
+    // Render Active Scene
+    if (gameState === STATE_SPLASH) {
+      renderSplashScreen(now * 0.001);
+    } else if (gameState === STATE_MENU) {
+      renderPseudo3D();
+      renderModalMenu("SUNSET COAST TURBO", "STAGE 1: GOLDEN COAST HIGHWAY", mainMenuItems);
+    } else if (gameState === STATE_INTRO) {
+      if (settings.cameraView === CAM_TOPDOWN && introPhase === 1) {
+        renderTopDown();
+      } else {
+        renderPseudo3D();
+      }
+      renderIntroOverlay();
+    } else if (gameState === STATE_RACING) {
+      if (settings.cameraView === CAM_TOPDOWN) {
+        renderTopDown();
+      } else {
+        renderPseudo3D();
+      }
+      renderHUD();
+    } else if (gameState === STATE_PAUSED) {
+      if (settings.cameraView === CAM_TOPDOWN) {
+        renderTopDown();
+      } else {
+        renderPseudo3D();
+      }
+      renderHUD();
+      renderModalMenu("RACE PAUSED", "STAGE 1: SUNSET COAST HIGHWAY", pauseMenuItems);
+    } else if (gameState === STATE_RESULTS) {
+      if (settings.cameraView === CAM_TOPDOWN) {
+        renderTopDown();
+      } else {
+        renderPseudo3D();
+      }
+      renderResultsScreen();
+    }
+
+    requestAnimationFrame(gameLoop);
+  }
+
+  requestAnimationFrame(gameLoop);
+})();
+</script>
+</body>
+</html>
